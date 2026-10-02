@@ -1,0 +1,6 @@
+{
+  "name": "OmniTools - PDF 변환, 이미지 합치기 & 음악 타이머",
+  "description": "고성능 서버리스 PDF 이미지 변환(DPI/포맷 설정), 다중 이미지 가로/세로 병합, 엑셀 및 CSV 데이터 병합(XLSX, XLSB, XLSM, CSV), 유튜브 음악 타이머 올인원 웹 앱 (Created by NYEONGEON HANN)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
