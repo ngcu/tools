@@ -21,6 +21,7 @@ import {
   BellOff
 } from 'lucide-react';
 import { playCompletionSound, playTickSound, startRepeatingAlarm, stopRepeatingAlarm } from '../utils/sound';
+import { safeStorage } from '../utils/safeStorage';
 
 interface CafeSample {
   id: string;
@@ -95,8 +96,8 @@ declare global {
 export const MusicTimerView: React.FC = () => {
   // 1. YouTube Link & Persistent Storage (with automatic migration of broken legacy IDs)
   const [youtubeInput, setYoutubeInput] = useState<string>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.YOUTUBE_URL);
-    const savedId = localStorage.getItem(STORAGE_KEYS.YOUTUBE_ID);
+    const saved = safeStorage.getItem(STORAGE_KEYS.YOUTUBE_URL);
+    const savedId = safeStorage.getItem(STORAGE_KEYS.YOUTUBE_ID);
     if (!saved || (savedId && BROKEN_LEGACY_IDS.has(savedId))) {
       return 'https://www.youtube.com/watch?v=MYPVQccHhAQ';
     }
@@ -104,7 +105,7 @@ export const MusicTimerView: React.FC = () => {
   });
 
   const [currentVideoId, setCurrentVideoId] = useState<string>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.YOUTUBE_ID);
+    const saved = safeStorage.getItem(STORAGE_KEYS.YOUTUBE_ID);
     if (!saved || BROKEN_LEGACY_IDS.has(saved)) {
       return 'MYPVQccHhAQ';
     }
@@ -112,11 +113,11 @@ export const MusicTimerView: React.FC = () => {
   });
 
   const [currentTitle, setCurrentTitle] = useState<string>(() => {
-    const savedId = localStorage.getItem(STORAGE_KEYS.YOUTUBE_ID);
+    const savedId = safeStorage.getItem(STORAGE_KEYS.YOUTUBE_ID);
     if (!savedId || BROKEN_LEGACY_IDS.has(savedId)) {
       return '코지 커피숍 피아노 재즈';
     }
-    return localStorage.getItem(STORAGE_KEYS.YOUTUBE_TITLE) || '코지 커피숍 피아노 재즈';
+    return safeStorage.getItem(STORAGE_KEYS.YOUTUBE_TITLE) || '코지 커피숍 피아노 재즈';
   });
 
   const [playerState, setPlayerState] = useState<'unstarted' | 'playing' | 'paused' | 'buffering' | 'error'>('unstarted');
@@ -124,7 +125,7 @@ export const MusicTimerView: React.FC = () => {
 
   const [savedFavorites, setSavedFavorites] = useState<{ title: string; url: string; videoId: string }[]>(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEYS.FAVORITES);
+      const stored = safeStorage.getItem(STORAGE_KEYS.FAVORITES);
       return stored ? JSON.parse(stored) : [];
     } catch {
       return [];
@@ -133,7 +134,7 @@ export const MusicTimerView: React.FC = () => {
 
   // 2. Timer States (30m, 15m, 12m, 10m)
   const [selectedPresetMin, setSelectedPresetMin] = useState<TimerPresetMinute>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.SELECTED_PRESET);
+    const saved = safeStorage.getItem(STORAGE_KEYS.SELECTED_PRESET);
     if (saved === '15') return 15;
     if (saved === '12') return 12;
     if (saved === '10') return 10;
@@ -141,7 +142,7 @@ export const MusicTimerView: React.FC = () => {
   });
 
   const [totalSeconds, setTotalSeconds] = useState<number>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.SELECTED_PRESET);
+    const saved = safeStorage.getItem(STORAGE_KEYS.SELECTED_PRESET);
     if (saved === '15') return 15 * 60;
     if (saved === '12') return 12 * 60;
     if (saved === '10') return 10 * 60;
@@ -149,7 +150,7 @@ export const MusicTimerView: React.FC = () => {
   });
 
   const [remainingSeconds, setRemainingSeconds] = useState<number>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.SELECTED_PRESET);
+    const saved = safeStorage.getItem(STORAGE_KEYS.SELECTED_PRESET);
     if (saved === '15') return 15 * 60;
     if (saved === '12') return 12 * 60;
     if (saved === '10') return 10 * 60;
@@ -164,15 +165,15 @@ export const MusicTimerView: React.FC = () => {
 
   // 3. User Options
   const [autoPlayOnStart, setAutoPlayOnStart] = useState<boolean>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.AUTO_PLAY_ON_START);
+    const saved = safeStorage.getItem(STORAGE_KEYS.AUTO_PLAY_ON_START);
     return saved !== null ? saved === 'true' : true;
   });
   const [autoPauseOnEnd, setAutoPauseOnEnd] = useState<boolean>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.AUTO_PAUSE_ON_END);
+    const saved = safeStorage.getItem(STORAGE_KEYS.AUTO_PAUSE_ON_END);
     return saved !== null ? saved === 'true' : true;
   });
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.SOUND_ENABLED);
+    const saved = safeStorage.getItem(STORAGE_KEYS.SOUND_ENABLED);
     return saved !== null ? saved === 'true' : true;
   });
 
@@ -240,7 +241,7 @@ export const MusicTimerView: React.FC = () => {
           rel: 0,
           modestbranding: 1,
           playsinline: 1,
-          origin: window.location.origin,
+          origin: typeof window !== 'undefined' && window.location.origin && window.location.origin !== 'null' ? window.location.origin : undefined,
         },
         events: {
           onReady: (event: any) => {
@@ -299,13 +300,9 @@ export const MusicTimerView: React.FC = () => {
 
   // Persist video URL
   const persistVideoInfo = (url: string, vid: string, title: string) => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.YOUTUBE_URL, url);
-      localStorage.setItem(STORAGE_KEYS.YOUTUBE_ID, vid);
-      localStorage.setItem(STORAGE_KEYS.YOUTUBE_TITLE, title);
-    } catch {
-      // ignore
-    }
+    safeStorage.setItem(STORAGE_KEYS.YOUTUBE_URL, url);
+    safeStorage.setItem(STORAGE_KEYS.YOUTUBE_ID, vid);
+    safeStorage.setItem(STORAGE_KEYS.YOUTUBE_TITLE, title);
   };
 
   // Change video handler
@@ -345,21 +342,13 @@ export const MusicTimerView: React.FC = () => {
       },
     ];
     setSavedFavorites(newFavs);
-    try {
-      localStorage.setItem(STORAGE_KEYS.FAVORITES, JSON.stringify(newFavs));
-    } catch {
-      // ignore
-    }
+    safeStorage.setItem(STORAGE_KEYS.FAVORITES, JSON.stringify(newFavs));
   };
 
   const handleRemoveFavorite = (vid: string) => {
     const filtered = savedFavorites.filter((f) => f.videoId !== vid);
     setSavedFavorites(filtered);
-    try {
-      localStorage.setItem(STORAGE_KEYS.FAVORITES, JSON.stringify(filtered));
-    } catch {
-      // ignore
-    }
+    safeStorage.setItem(STORAGE_KEYS.FAVORITES, JSON.stringify(filtered));
   };
 
   // Stop alarm sound
@@ -493,29 +482,17 @@ export const MusicTimerView: React.FC = () => {
   // Option Toggles
   const handleToggleAutoPlayOnStart = (val: boolean) => {
     setAutoPlayOnStart(val);
-    try {
-      localStorage.setItem(STORAGE_KEYS.AUTO_PLAY_ON_START, String(val));
-    } catch {
-      // ignore
-    }
+    safeStorage.setItem(STORAGE_KEYS.AUTO_PLAY_ON_START, String(val));
   };
 
   const handleToggleAutoPauseOnEnd = (val: boolean) => {
     setAutoPauseOnEnd(val);
-    try {
-      localStorage.setItem(STORAGE_KEYS.AUTO_PAUSE_ON_END, String(val));
-    } catch {
-      // ignore
-    }
+    safeStorage.setItem(STORAGE_KEYS.AUTO_PAUSE_ON_END, String(val));
   };
 
   const handleToggleSound = (val: boolean) => {
     setSoundEnabled(val);
-    try {
-      localStorage.setItem(STORAGE_KEYS.SOUND_ENABLED, String(val));
-    } catch {
-      // ignore
-    }
+    safeStorage.setItem(STORAGE_KEYS.SOUND_ENABLED, String(val));
   };
 
   // Formatting Time
