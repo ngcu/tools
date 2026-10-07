@@ -31,22 +31,10 @@ interface CafeSample {
   emoji: string;
 }
 
-// 5 Curated Cafe Music Samples (100% Embed-Safe & Tested with YouTube API)
+// 5 Curated Music & Praise Samples (100% Embed-Safe & Tested with YouTube API)
+// 1 & 2: Existing 3rd and 4th tracks moved to front
+// 3, 4, 5: Beautiful CCM Praise & Worship Piano BGM tracks
 const CAFE_SAMPLES: CafeSample[] = [
-  {
-    id: 'cafe-cozy-piano',
-    title: '코지 커피숍 피아노 재즈',
-    desc: '부드러운 피아노와 따뜻한 카페 재즈 앰비언스',
-    youtubeId: 'MYPVQccHhAQ',
-    emoji: '☕',
-  },
-  {
-    id: 'cafe-paris-beats',
-    title: '카페 칠 비트 & 릴랙스',
-    desc: '공부와 집중에 최적화된 편안한 로파이 비트',
-    youtubeId: '7NOSDKb0HlU',
-    emoji: '🥐',
-  },
   {
     id: 'cafe-slow-jazz',
     title: '슬로우 재즈 피아노 라디오',
@@ -62,11 +50,25 @@ const CAFE_SAMPLES: CafeSample[] = [
     emoji: '🌿',
   },
   {
-    id: 'cafe-bossa-lounge',
-    title: '보사 라운지 가든 카페',
-    desc: '감미롭고 산뜻한 여름 가든 카페 음악',
-    youtubeId: 'VkZA450ilUU',
-    emoji: '☕',
+    id: 'praise-bright-ccm',
+    title: '카페에서 듣는 밝은 찬양',
+    desc: '은혜와 평안을 주는 편안한 CCM 피아노',
+    youtubeId: '0TlQquzJXYo',
+    emoji: '🕊️',
+  },
+  {
+    id: 'praise-bossa-worship',
+    title: '보사 피아노 묵상 찬양',
+    desc: '잔잔하고 감미로운 워십 피아노 연주',
+    youtubeId: 'OMxt57UyYRY',
+    emoji: '🙏',
+  },
+  {
+    id: 'praise-prayer-ccm',
+    title: '주의 인도하심을 구하는 찬양',
+    desc: '마음에 깊은 평안을 주는 기도 & 묵상 피아노',
+    youtubeId: 'n6JiWNkm27g',
+    emoji: '✨',
   },
 ];
 
@@ -98,26 +100,26 @@ export const MusicTimerView: React.FC = () => {
   const [youtubeInput, setYoutubeInput] = useState<string>(() => {
     const saved = safeStorage.getItem(STORAGE_KEYS.YOUTUBE_URL);
     const savedId = safeStorage.getItem(STORAGE_KEYS.YOUTUBE_ID);
-    if (!saved || (savedId && BROKEN_LEGACY_IDS.has(savedId))) {
-      return 'https://www.youtube.com/watch?v=MYPVQccHhAQ';
+    if (!saved || (savedId && (BROKEN_LEGACY_IDS.has(savedId) || savedId === 'MYPVQccHhAQ'))) {
+      return 'https://www.youtube.com/watch?v=Dx5qFachd3A';
     }
     return saved;
   });
 
   const [currentVideoId, setCurrentVideoId] = useState<string>(() => {
     const saved = safeStorage.getItem(STORAGE_KEYS.YOUTUBE_ID);
-    if (!saved || BROKEN_LEGACY_IDS.has(saved)) {
-      return 'MYPVQccHhAQ';
+    if (!saved || (saved && (BROKEN_LEGACY_IDS.has(saved) || saved === 'MYPVQccHhAQ'))) {
+      return 'Dx5qFachd3A';
     }
     return saved;
   });
 
   const [currentTitle, setCurrentTitle] = useState<string>(() => {
     const savedId = safeStorage.getItem(STORAGE_KEYS.YOUTUBE_ID);
-    if (!savedId || BROKEN_LEGACY_IDS.has(savedId)) {
-      return '코지 커피숍 피아노 재즈';
+    if (!savedId || (savedId && (BROKEN_LEGACY_IDS.has(savedId) || savedId === 'MYPVQccHhAQ'))) {
+      return '슬로우 재즈 피아노 라디오';
     }
-    return safeStorage.getItem(STORAGE_KEYS.YOUTUBE_TITLE) || '코지 커피숍 피아노 재즈';
+    return safeStorage.getItem(STORAGE_KEYS.YOUTUBE_TITLE) || '슬로우 재즈 피아노 라디오';
   });
 
   const [playerState, setPlayerState] = useState<'unstarted' | 'playing' | 'paused' | 'buffering' | 'error'>('unstarted');
@@ -545,7 +547,7 @@ export const MusicTimerView: React.FC = () => {
           <div className="p-3 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-2.5">
             <div className="flex items-center gap-1.5 pb-2 border-b border-slate-800/80">
               <Coffee className="w-4 h-4 text-amber-400 flex-shrink-0" />
-              <h3 className="text-xs font-bold text-white tracking-tight">카페 음악 5선</h3>
+              <h3 className="text-xs font-bold text-white tracking-tight">카페 & 찬양 5선</h3>
             </div>
 
             {/* Cafe Music Items (Grid on mobile, column on desktop) */}
