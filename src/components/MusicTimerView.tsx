@@ -541,15 +541,15 @@ export const MusicTimerView: React.FC = () => {
         {/* ========================================================================= */}
         {/* 1. LEFT AREA (~10-12% on Desktop): 5 Cafe Music Samples (Vertical List)   */}
         {/* ========================================================================= */}
-        <div className="w-full lg:w-[13%] xl:w-[11%] flex-shrink-0 space-y-2.5">
+        <div className="w-full lg:w-[13%] xl:w-[11%] flex-shrink-0 space-y-2.5 order-3 lg:order-1">
           <div className="p-3 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-2.5">
             <div className="flex items-center gap-1.5 pb-2 border-b border-slate-800/80">
               <Coffee className="w-4 h-4 text-amber-400 flex-shrink-0" />
               <h3 className="text-xs font-bold text-white tracking-tight">카페 음악 5선</h3>
             </div>
 
-            {/* 5 Vertical Cafe Music Items */}
-            <div className="flex flex-col gap-2">
+            {/* Cafe Music Items (Grid on mobile, column on desktop) */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-1 gap-2">
               {CAFE_SAMPLES.map((sample, idx) => {
                 const isActive = currentVideoId === sample.youtubeId;
                 return (
@@ -598,7 +598,7 @@ export const MusicTimerView: React.FC = () => {
         {/* ========================================================================= */}
         {/* 2. CENTER AREA (~68-70% on Desktop): YouTube Link Bar & Wide Player Screen */}
         {/* ========================================================================= */}
-        <div className="w-full lg:flex-1 space-y-3.5">
+        <div className="w-full lg:flex-1 space-y-3.5 order-2 lg:order-2">
           {/* YouTube Link Input Bar */}
           <div className="p-3.5 sm:p-4 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-md">
             <div className="flex flex-col sm:flex-row gap-2 items-center">
@@ -759,7 +759,7 @@ export const MusicTimerView: React.FC = () => {
         {/* ========================================================================= */}
         {/* 3. RIGHT AREA (~20% on Desktop): Graphical Circular Timer Widget          */}
         {/* ========================================================================= */}
-        <div className="w-full lg:w-[22%] xl:w-[20%] lg:sticky lg:top-20 space-y-4">
+        <div className="w-full lg:w-[22%] xl:w-[20%] lg:sticky lg:top-20 space-y-4 order-1 lg:order-3">
           <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl space-y-5">
             {/* Header info */}
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
