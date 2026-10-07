@@ -235,10 +235,12 @@ export const MusicTimerView: React.FC = () => {
 
       playerRef.current = new window.YT.Player(containerId, {
         videoId: currentVideoId,
+        host: 'https://www.youtube.com',
         playerVars: {
           autoplay: 0,
           controls: 1,
           rel: 0,
+          enablejsapi: 1,
           modestbranding: 1,
           playsinline: 1,
           origin: typeof window !== 'undefined' && window.location.origin && window.location.origin !== 'null' ? window.location.origin : undefined,
