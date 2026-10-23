@@ -547,7 +547,7 @@ export const MusicTimerView: React.FC = () => {
           <div className="p-3 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-2.5">
             <div className="flex items-center gap-1.5 pb-2 border-b border-slate-800/80">
               <Coffee className="w-4 h-4 text-amber-400 flex-shrink-0" />
-              <h3 className="text-xs font-bold text-white tracking-tight">카페 & 찬양 5선</h3>
+              <h3 className="text-xs font-bold text-white tracking-tight">배경음악 5선</h3>
             </div>
 
             {/* Cafe Music Items (Grid on mobile, column on desktop) */}

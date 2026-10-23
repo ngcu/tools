@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  Scissors,
   FileImage,
   Timer,
   Shield,
@@ -7,6 +8,7 @@ import {
   SplitSquareHorizontal,
   FileSpreadsheet
 } from 'lucide-react';
+import { ImageCropView } from './components/ImageCropView';
 import { PdfToImageView } from './components/PdfToImageView';
 import { MusicTimerView } from './components/MusicTimerView';
 import { ImageMergeView } from './components/ImageMergeView';
@@ -14,9 +16,10 @@ import { ExcelMergeView } from './components/ExcelMergeView';
 
 export default function App() {
   const isLocalFile = typeof window !== 'undefined' && window.location.protocol === 'file:';
-  const [activeTab, setActiveTab] = useState<'pdf' | 'merge' | 'excel' | 'music'>('pdf');
+  const [activeTab, setActiveTab] = useState<'crop' | 'pdf' | 'merge' | 'excel' | 'music'>('crop');
 
   const tabNames: Record<string, string> = {
+    crop: 'Image Crop (자르기)',
     pdf: 'PDF to Image',
     merge: 'Image Merge',
     excel: 'Excel Merge',
@@ -49,8 +52,22 @@ export default function App() {
             </div>
           </div>
 
-          {/* Desktop Center Tabs (hidden on mobile, visible on md+) */}
+          {/* Desktop Center Tabs: 1st menu is Image Crop */}
           <nav className="hidden md:flex items-center p-1 rounded-xl bg-slate-900 border border-slate-800">
+            {/* 1. Image Crop */}
+            <button
+              onClick={() => setActiveTab('crop')}
+              className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                activeTab === 'crop'
+                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md shadow-indigo-600/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+              }`}
+            >
+              <Scissors className="w-4 h-4" />
+              <span>Image Crop</span>
+            </button>
+
+            {/* 2. PDF to Image */}
             <button
               onClick={() => setActiveTab('pdf')}
               className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
@@ -63,6 +80,7 @@ export default function App() {
               <span>PDF to Image</span>
             </button>
 
+            {/* 3. Image Merge */}
             <button
               onClick={() => setActiveTab('merge')}
               className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
@@ -75,6 +93,7 @@ export default function App() {
               <span>Image Merge</span>
             </button>
 
+            {/* 4. Excel Merge */}
             <button
               onClick={() => setActiveTab('excel')}
               className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
@@ -87,6 +106,7 @@ export default function App() {
               <span>Excel Merge</span>
             </button>
 
+            {/* 5. Music Timer (Web only) */}
             {!isLocalFile && (
               <button
                 onClick={() => setActiveTab('music')}
@@ -112,15 +132,27 @@ export default function App() {
 
       {/* Main Content Area: Keep tabs mounted, extra bottom padding on mobile for bottom tab bar */}
       <main className="flex-1 w-full px-2.5 sm:px-6 lg:px-8 py-3.5 sm:py-6 pb-24 md:pb-8">
+        {/* 1. Image Crop View */}
+        <div className={activeTab === 'crop' ? 'block' : 'hidden'}>
+          <ImageCropView />
+        </div>
+
+        {/* 2. PDF to Image View */}
         <div className={activeTab === 'pdf' ? 'block' : 'hidden'}>
           <PdfToImageView />
         </div>
+
+        {/* 3. Image Merge View */}
         <div className={activeTab === 'merge' ? 'block' : 'hidden'}>
           <ImageMergeView />
         </div>
+
+        {/* 4. Excel Merge View */}
         <div className={activeTab === 'excel' ? 'block' : 'hidden'}>
           <ExcelMergeView />
         </div>
+
+        {/* 5. Music Timer View */}
         {!isLocalFile && (
           <div className={activeTab === 'music' ? 'block' : 'hidden'}>
             <MusicTimerView />
@@ -144,9 +176,22 @@ export default function App() {
       {/* ========================================================================= */}
       {/* Mobile Bottom Navigation Bar (Visible only on mobile screens < md)        */}
       {/* ========================================================================= */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#090d16]/95 backdrop-blur-xl border-t border-slate-800/90 shadow-[0_-8px_24px_rgba(0,0,0,0.5)] px-2 py-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-        <div className="grid grid-cols-4 gap-1 items-center max-w-md mx-auto">
-          {/* Tab 1: PDF */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#090d16]/95 backdrop-blur-xl border-t border-slate-800/90 shadow-[0_-8px_24px_rgba(0,0,0,0.5)] px-1.5 py-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        <div className={`grid ${!isLocalFile ? 'grid-cols-5' : 'grid-cols-4'} gap-1 items-center max-w-lg mx-auto`}>
+          {/* Tab 1: Crop */}
+          <button
+            onClick={() => setActiveTab('crop')}
+            className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition cursor-pointer ${
+              activeTab === 'crop'
+                ? 'text-indigo-400 font-bold bg-indigo-500/15'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Scissors className="w-4 h-4 sm:w-5 sm:h-5 mb-0.5" />
+            <span className="text-[9px] sm:text-[10px] leading-tight">자르기</span>
+          </button>
+
+          {/* Tab 2: PDF */}
           <button
             onClick={() => setActiveTab('pdf')}
             className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition cursor-pointer ${
@@ -155,11 +200,11 @@ export default function App() {
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <FileImage className="w-5 h-5 mb-0.5" />
-            <span className="text-[10px] leading-tight">PDF 변환</span>
+            <FileImage className="w-4 h-4 sm:w-5 sm:h-5 mb-0.5" />
+            <span className="text-[9px] sm:text-[10px] leading-tight">PDF 변환</span>
           </button>
 
-          {/* Tab 2: Merge */}
+          {/* Tab 3: Merge */}
           <button
             onClick={() => setActiveTab('merge')}
             className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition cursor-pointer ${
@@ -168,11 +213,11 @@ export default function App() {
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <SplitSquareHorizontal className="w-5 h-5 mb-0.5" />
-            <span className="text-[10px] leading-tight">이미지 병합</span>
+            <SplitSquareHorizontal className="w-4 h-4 sm:w-5 sm:h-5 mb-0.5" />
+            <span className="text-[9px] sm:text-[10px] leading-tight">이미지 병합</span>
           </button>
 
-          {/* Tab 3: Excel */}
+          {/* Tab 4: Excel */}
           <button
             onClick={() => setActiveTab('excel')}
             className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition cursor-pointer ${
@@ -181,12 +226,12 @@ export default function App() {
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <FileSpreadsheet className="w-5 h-5 mb-0.5" />
-            <span className="text-[10px] leading-tight">엑셀 머지</span>
+            <FileSpreadsheet className="w-4 h-4 sm:w-5 sm:h-5 mb-0.5" />
+            <span className="text-[9px] sm:text-[10px] leading-tight">엑셀 머지</span>
           </button>
 
-          {/* Tab 4: Music Timer */}
-          {!isLocalFile ? (
+          {/* Tab 5: Music Timer */}
+          {!isLocalFile && (
             <button
               onClick={() => setActiveTab('music')}
               className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition cursor-pointer ${
@@ -195,14 +240,9 @@ export default function App() {
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Timer className="w-5 h-5 mb-0.5" />
-              <span className="text-[10px] leading-tight">음악 타이머</span>
+              <Timer className="w-4 h-4 sm:w-5 sm:h-5 mb-0.5" />
+              <span className="text-[9px] sm:text-[10px] leading-tight">음악 타이머</span>
             </button>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-1 px-1 opacity-30">
-              <Timer className="w-5 h-5 mb-0.5 text-slate-600" />
-              <span className="text-[10px] leading-tight text-slate-600">웹 전용</span>
-            </div>
           )}
         </div>
       </nav>
