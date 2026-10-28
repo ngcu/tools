@@ -1,178 +1,125 @@
-# Image Crop (이미지 크롭: 자동 여백 제거 + 수동 정밀 크롭)
-
-외부 불필요한 여백을 자동으로 잘라주는 **Auto Crop**과, 원하는 영역을 자유롭게 미세 조절하는 **Manual Crop** 2단계 파이프라인을 거쳐 고화질 이미지로 내보내는 정밀 크롭 도구입니다.
+# OmniTools: Image Edit Studio, File to Image (Office 지원) & Offline HTML 다운로드
 
 ---
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> 사전 인터뷰(Phase 1)를 통해 확정된 결정 사항과 기본 동작 방식입니다.
+> 사전 인터뷰(Phase 1)를 통해 확정된 세부 결정 사항입니다.
 
-- **Confirmed Decision 1: Auto Crop 여백 감지 알고리즘**
-  - 이미지 4개 모서리(좌상, 우상, 좌하, 우하)의 픽셀 RGBA 색상 및 알파 채널을 자동 샘플링합니다.
-  - 모서리 배경색과 투명도를 기준으로 상/하/좌/우 바운딩 박스를 고속 픽셀 스캔하여 내용물 외곽 경계를 1차 자동 감지합니다.
-- **Confirmed Decision 2: Manual Crop 조작 방식**
-  - Auto Crop으로 감지된 크롭 박스 위에 직관적인 **8방향 리사이즈 핸들(상, 하, 좌, 우, 모서리 4개)**과 중앙 이동 드래그 인터페이스를 제공합니다.
-  - 마우스 드래그 및 모바일 터치 제스처를 완벽 지원하며, 크롭 외곽 영역은 어두운 딤(Dimmed) 처리로 시각적 집중도를 극대화합니다.
-- **Confirmed Decision 3: 처리 범위 및 워크플로우**
-  - **단일 이미지 2단계 정밀 처리**: 이미지 업로드 ➔ [1단계] Auto Crop 경계 즉시 감지 ➔ [2단계] 수동 조절 ➔ 실시간 크기(W x H) 확인 및 다운로드.
-  - 언제든 "오토크롭 초기화", "전체 선택", "100% 원본 보기"로 원클릭 복귀할 수 있습니다.
-- **Confirmed Decision 4: 내보내기 포맷**
-  - 원본 포맷 유지를 기본으로 하되, **PNG(투명 배경 보존)**, **JPEG**, **WebP**를 자유롭게 선택할 수 있으며, 다운로드 및 **클립보드 복사**를 지원합니다.
-- **Confirmed Decision 5: 메뉴 배치**
-  - 사용자의 요청에 따라 상단 탭 및 모바일 하단 네비게이션의 **첫 번째 메뉴(1순위)**로 배치됩니다:
-    `[Image Crop]` ➔ `[PDF to Image]` ➔ `[Image Merge]` ➔ `[Excel Merge]` ➔ `[Music Timer]`
+- **Confirmed Decision 1: Offline HTML 다운로드 버튼**
+  - 상단 헤더 우측 상태 뱃지 옆에 눈에 띄는 **`Offline HTML 다운로드`** 액션 버튼을 신설합니다.
+  - 클릭 시 서버 통신 없이 현재 브라우저 메모리에 준비된 최신 단일 오프라인 배포 파일(`OmniTools_Offline.html`)이 즉시 컴퓨터/모바일 다운로드 폴더로 저장됩니다.
+- **Confirmed Decision 2: Image Edit 좌측 도구 팔레트**
+  - 메뉴 명칭을 **`Image Edit (이미지 편집)`**으로 승격하고 좌측에 수직 도구 팔레트(Toolbar Palette)를 구축합니다.
+  - 지원 도구 9종:
+    1. **Crop (자르기)**: 1단계 모서리 감지 Auto Crop + 2단계 8방향 핸들 Manual Crop
+    2. **Resize (크기 조정)**: 가로/세로 px 입력, 비율 잠금, 25%/50%/75%/200% 프리셋
+    3. **Canvas Size (캔버스 확장)**: 패딩 추가, 9방향 기준 앵커, 배경색(투명/흰색/검정/컬러)
+    4. **Sharpen (선명도 강화)**: 확대 시 선명도를 복원하는 컨볼루션 언샵 마스크(Unsharp Mask)
+    5. **Mosaic & Blur (특정 영역 마스킹)**: 영역 드래그 지정, 모자이크 타일 크기 및 블러 반경 정밀 슬라이더
+    6. **Rotate & Flip (회전/반전)**: 90도 회전, 좌우 반전, 상하 반전
+    7. **Color Adjust (색상 보정)**: 밝기(Brightness), 대비(Contrast), 채도(Saturation) 슬라이더
+    8. **Border & Radius (테두리/곡률)**: 둥근 모서리(Border Radius) 및 테두리 선(Border Stroke)
+    9. **Text & Watermark (텍스트/워터마크)**: 글자 입력, 폰트 크기, 글자색, 투명도 오버레이
+- **Confirmed Decision 3: File to Image (PDF + DOCX + PPTX) 확장**
+  - 메뉴 명칭을 **`File to Image`**로 변경하고, 파일 확장자(.pdf, .docx, .pptx)를 자동 인식합니다.
+  - **PDF**: 기존의 초고속 `pdfjs-dist` 벡터 렌더링 유지 (DPI 72/150/300/600 선택)
+  - **DOCX**: 브라우저 클라이언트 사이드 XML 파서 기반으로 텍스트, 테이블, 헤딩 서식을 감지하여 페이지별 고화질 캔버스로 변환
+  - **PPTX**: 슬라이드 XML 구조(ZIP)를 언팩하여 각 슬라이드별 레이아웃과 텍스트/이미지를 추출하여 슬라이드별 이미지로 변환
+  - 변환된 모든 페이지/슬라이드는 일괄 ZIP 압축 다운로드 및 개별 이미지 저장을 동일하게 지원
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **What It Does**:
-  웹 디자이너, 문서 작성자, 기획자, 개발자가 캡처 도구나 스크린샷에서 발생하는 불필요한 흰색/단색/투명 외부 여백을 단 한 번의 클릭(또는 업로드 즉시)으로 자동 제거하고, 캔버스 핸들로 필요한 부분만 픽셀 단위로 잘라내어 저장할 수 있는 고성능 클라이언트 사이드 도구입니다.
-- **Target Audience / Persona**:
-  - 스크린샷이나 로고, 그래픽의 바깥 여백을 빠르게 정리해야 하는 실무자
-  - 서버로 이미지를 업로드하지 않고 브라우저 내부에서 안전하고 즉각적인 이미지 편집을 원하는 사용자
-- **Key Value**:
-  - 100% 브라우저 메모리(HTML5 Canvas) 연산으로 데이터 유출 위험 제로
-  - 무거운 그래픽 툴(포토샵 등) 설치 없이 웹에서 3초 만에 완결되는 초경량 2단계 크롭
+1. **상단 Offline 다운로더**: 사용자가 웹 버전을 쓰다가 언제든 인터넷 없는 환경에서도 쓸 수 있도록 단일 오프라인 파일을 즉시 다운로드 제공.
+2. **올인원 이미지 에디터**: 단순 크롭을 넘어 리사이징, 캔버스 패딩, 모자이크 마스킹, 선명도 향상, 텍스트 워터마크까지 웹 브라우저 안에서 100% 프라이빗하게 처리.
+3. **만능 문서 ➔ 이미지 변환기**: PDF뿐 아니라 직장/학교에서 가장 많이 다루는 워드(DOCX)와 파워포인트(PPTX)를 프로그램 설치 없이 브라우저에서 바로 고화질 이미지(PNG/JPG)로 변환.
 
 ---
 
 ## 2. User Experience & Visual Design
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                              OmniTools                                 │
-│  [✂️ Image Crop] [📄 PDF to Image] [🖼️ Image Merge] [📊 Excel Merge] ...│
-├────────────────────────────────────────────────────────────────────────┤
-│                                                                        │
-│  ┌──────────────────────────────────┐  ┌─────────────────────────────┐ │
-│  │ 🖼️ 인터랙티브 크롭 뷰포트        │  │ ⚙️ 2단계 컨트롤 사이드바    │ │
-│  │                                  │  │                             │ │
-│  │    ┌────────────────────────┐    │  │ 1단계: Auto Crop             │ │
-│  │ 딤 │ ┌───[ 8방향 핸들 ]───┐ │ 딤 │  │  • 여백 감지 감도: [  30  ] │ │
-│  │ 처 │ │                    │ │ 처 │  │  • [⚡ 자동 여백 자르기]    │ │
-│  │ 리 │ │   선택된 본문 영역 │ │ 리 │  │                             │ │
-│  │    │ │                    │ │    │  │ 2단계: Manual Crop          │ │
-│  │    │ └───[ 540 × 380px ]──┘ │    │  │  • X/Y/W/H 픽셀 수치 표시   │ │
-│  │    └────────────────────────┘    │  │  • [↺ 원본으로] [⚡ 자동]    │ │
-│  │                                  │  │                             │ │
-│  │   [🔍 줌 조절] [↔ 화면 맞춤]     │  │ 3단계: 내보내기             │ │
-│  │                                  │  │  • 포맷: [PNG / JPG / WEBP] │ │
-│  │                                  │  │  • [💾 크롭 이미지 다운로드]│ │
-│  └──────────────────────────────────┘  └─────────────────────────────┘ │
-└────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  OmniTools      [Image Edit] [File to Image] [Image Merge] ...  [💾 Offline HTML]│
+├──────────────────────────────────────────────────────────────────────────────┤
+│ ┌───────┐ ┌───────────────────────────────────────┐ ┌──────────────────────┐ │
+│ │팔레트 │ │          중앙 작업 뷰포트             │ │ 우측 세부 조절 패널  │ │
+│ │ ✂️ 자르기│ │                                       │ │                      │ │
+│ │ 📐 크기│ │   ┌───────────────────────────────┐   │ │ 선택된 도구 옵션     │ │
+│ │ 🖼️ 캔버스│ │   │                               │   │ │                      │ │
+│ │ ✨ 선명도│ │   │     작업 이미지 캔버스        │   │ │ [슬라이더 / 수치입력]│ │
+│ │ ▦ 모자이크│ │   │   (영역 선택 / 핸들 조작)     │   │ │                      │ │
+│ │ 🔄 회전│ │   │                               │   │ │ ──────────────────── │ │
+│ │ 🎨 보정│ │   └───────────────────────────────┘   │ │ [💾 결과 다운로드]  │ │
+│ │ 🔲 테두리│ │                                       │ │ [📋 클립보드 복사]  │ │
+│ │ ✍️ 텍스트│ │  [🔍 맞춤] [1:1 보기] [↺ 변경 취소]    │ │                      │ │
+│ └───────┘ └───────────────────────────────────────┘ └──────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key User Flows
 
-1. **이미지 입력 (Zero State)**:
-   - 드래그 앤 드롭 또는 파일 선택기, 클립보드 이미지 붙여넣기(`Ctrl+V`) 지원
-2. **1단계 Auto Crop (자동 여백 감지)**:
-   - 이미지가 로드되는 즉시 캔버스 픽셀 버퍼를 분석하여 4개 모서리 배경색을 식별
-   - 여백 오차 허용치(Tolerance, 기본값 15~20)를 기반으로 상/하/좌/우 유의미한 콘텐츠 바운딩 박스를 자동 계산
-   - 자동 감지된 바운딩 박스를 캔버스에 즉시 파란색 그리드와 함께 하이라이트 표시
-3. **2단계 Manual Crop (수동 미세 조절)**:
-   - 8개 리사이즈 핸들(좌상, 상, 우상, 우, 우하, 하, 좌하, 좌)을 드래그하여 원하는 영역 확장/축소
-   - 박스 내부를 드래그하여 크롭 위치 자유 이동
-   - 실시간으로 가로(W) × 세로(H) 픽셀 및 원본 대비 크롭 비율(%) 표시
-4. **내보내기 (Export)**:
-   - 단일 원클릭 "크롭 이미지 다운로드"
-   - 원클릭 "클립보드 복사 (`navigator.clipboard.write`)"
-   - 포맷(PNG, JPEG, WebP) 및 JPEG/WebP 품질 슬라이더
+1. **Offline HTML 다운로드 플로우**:
+   - 사용자가 헤더 우측의 `Offline HTML 다운로드` 버튼 클릭
+   - 최신 빌드된 단일 HTML 파일(`OmniTools_Offline.html`)이 즉시 브라우저 다운로드로 트리거
+   - "오프라인 파일 다운로드 완료! 인터넷 없이 더블클릭하여 바로 사용하실 수 있습니다." 안내 토스트 제공
 
-### Responsive Layout Strategy (Mobile & Desktop)
+2. **Image Edit 플로우**:
+   - 이미지 업로드 또는 `Ctrl+V` 붙여넣기
+   - 좌측 툴바에서 원하는 도구(자르기, 크기 조정, 모자이크, 선명도 등) 선택
+   - 우측 패널에서 슬라이더나 수치 조절 시 캔버스에 실시간 반영
+   - 언제든 `되돌리기(Undo)` / `초기화(Reset)` 가능
+   - 최종 결과물 PNG/JPG/WebP 다운로드 또는 클립보드 복사
 
-- **Desktop (md 이상)**: 좌측 대형 크롭 인터랙티브 캔버스 뷰포트 + 우측 정밀 컨트롤 패널(2열 스택)
-- **Mobile (md 미만)**:
-  - 상단: 터치 친화적 캔버스 인터랙션 영역 (핀치 줌 및 터치 핸들 크기 $\ge 44\text{px}$)
-  - 하단: 오토크롭 버튼 및 포맷/다운로드 액션 바
-  - 하단 앱 네비게이션의 1번 아이콘(`[자르기]`)으로 즉시 접근
+3. **File to Image 플로우**:
+   - PDF, DOCX, PPTX 파일을 드래그 앤 드롭
+   - 파일 확장자를 감지하여 파일 뱃지 및 메타데이터(총 페이지 수/슬라이드 수) 표시
+   - 해상도(DPI) 설정 후 "이미지로 변환" 클릭 ➔ 진행 상태 바 표시
+   - 변환 완료 후 갤러리 뷰에서 선택된 슬라이드들을 개별 또는 ZIP으로 다운로드
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
-
-- **Decision 1: 모서리 픽셀 색상 기반 알고리즘 vs 단순 흰색 감지**
-  - *선택*: 4개 코너(Top-Left, Top-Right, Bottom-Left, Bottom-Right)의 RGBA 색상을 가중 평균하여 배경색을 추정하는 알고리즘 채택
-  - *이유*: 일반 스크린샷은 흰색뿐 아니라 다크 모드(검정/짙은 회색) 또는 특정 단색 배경이 많음. 또한 알파가 0인 완전 투명 여백도 자연스럽게 감지됨.
-  - *사용자 제어*: 여백 감도(Tolerance) 슬라이더를 제공하여 아주 미세한 그라디언트나 압축 노이즈가 있는 여백도 깨끗이 잘라낼 수 있음.
-- **Decision 2: SVG/HTML 오버레이 기반 핸들 vs 순수 캔버스 렌더링**
-  - *선택*: 이미지 렌더링 캔버스 위에 반응형 SVG/DOM 크롭 박스 및 포인터 이벤트 핸들을 중첩하는 하이브리드 아키텍처
-  - *이유*: CSS 하드웨어 가속, 부드러운 드래그, 모바일 터치 이벤트(`pointerdown`, `pointermove`, `pointerup`) 처리의 정밀도 및 접근성이 순수 Canvas 다시 그리기보다 월등히 뛰어남.
-- **Decision 3: 단일 파일 오프라인 번들 호환성 유지**
-  - *선택*: 외부 무거운 크롭 라이브러리(cropperjs 등) 의존성을 추가하지 않고 경량화된 네이티브 React Canvas 유틸로 구현
-  - *이유*: 기존 `OmniTools_Offline.html` 단일 파일 번들 크기(1.2MB대)를 유지하며, 네트워크 의존 없이 100% 브라우저 내부에서 즉각 구동 보장.
-
----
-
-## 4. Technical Architecture & Data Strategy
-
-### System Component Architecture
+## 3. Technical Architecture & Component Strategy
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                           App.tsx                            │
-│  activeTab: 'crop' | 'pdf' | 'merge' | 'excel' | 'music'     │
-└──────────────┬───────────────────────────────────────────────┘
-               │ (activeTab === 'crop')
-               ▼
-┌──────────────────────────────────────────────────────────────┐
-│                    ImageCropView.tsx                         │
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │ State:                                                 │  │
-│  │  - imageFile, imageElement, naturalWidth, naturalHeight│  │
-│  │  - cropRect: { x, y, width, height }                   │  │
-│  │  - autoCropRect: { x, y, width, height }               │  │
-│  │  - tolerance (0~100)                                   │  │
-│  │  - exportFormat ('png' | 'jpeg' | 'webp')              │  │
-│  │  - exportQuality (0.1 ~ 1.0)                           │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                              │
-│  ┌───────────────────────────┐  ┌──────────────────────────┐ │
-│  │ CropCanvasViewport.tsx    │  │ CropControlsPanel.tsx    │ │
-│  │ - HTML5 Image Viewer      │  │ - Auto Crop Trigger      │ │
-│  │ - Dimmed Mask Overlay     │  │ - Tolerance Slider       │ │
-│  │ - 8-Way Resize Handles    │  │ - Reset to Full / Auto   │ │
-│  │ - Pointer / Touch Drag    │  │ - Export Format Selector │ │
-│  │                           │  │ - Download & Copy Button │ │
-│  └───────────────────────────┘  └──────────────────────────┘ │
-└──────────────┬───────────────────────────────────────────────┘
-               │
-               ▼
-┌──────────────────────────────────────────────────────────────┐
-│                   utils/imageCropper.ts                      │
-│  - detectAutoCropBounds(img, tolerance): BoundingBox         │
-│  - cropAndExportImage(img, cropRect, format, quality): Blob  │
-└──────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                               App.tsx                                  │
+│  - Header: Download Offline Button (triggers OmniTools_Offline.html)   │
+│  - Tabs: 'edit' | 'file-to-image' | 'merge' | 'excel' | 'music'        │
+└───────────────┬────────────────────────────────────────┬───────────────┘
+                │ (activeTab === 'edit')                 │ (activeTab === 'file-to-image')
+                ▼                                        ▼
+┌──────────────────────────────────────┐ ┌───────────────────────────────┐
+│          ImageEditView.tsx           │ │       FileToImageView.tsx     │
+│  - Left: ToolPalette (9 tools)       │ │  - Format Sniffer:            │
+│  - Center: Interactive Canvas Canvas │ │    * PDF: pdfjsLib (vector)   │
+│  - Right: Tool Settings & Export Bar │ │    * DOCX: docxParser/Canvas  │
+│  - Engine: utils/imageStudio.ts      │ │    * PPTX: pptxParser/Canvas  │
+│    (Crop, Resize, CanvasSize, Blur,  │ │  - Batch Downloader & ZIP     │
+│     Mosaic, Sharpen, Filters, Text)  │ └───────────────────────────────┘
+└──────────────────────────────────────┘
 ```
 
-### Data Structures & Types
+### Data Structures & Utility Engine (`src/utils/imageStudio.ts`)
 
-```typescript
-export interface CropRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface AutoCropOptions {
-  tolerance: number; // 0 to 100 (color difference threshold)
-  sampleCornerSize: number; // e.g. 5px
-}
-
-export type ExportFormat = 'png' | 'jpeg' | 'webp';
-```
+- `applySharpenKernel(imageData, strength)`: 3x3 라플라시안/언샵 컨볼루션 필터로 경계선 선명도 복원
+- `applyMosaicFilter(ctx, rect, tileSize)`: 지정 사각형 영역의 픽셀을 다운샘플링/타일 블록화
+- `applyBlurFilter(ctx, rect, radius)`: 지정 사각형 영역 가우시안/박스 블러 처리
+- `applyColorAdjustments(canvas, brightness, contrast, saturation)`: CSS filter 및 픽셀 연산 합성
+- `applyTextWatermark(canvas, text, options)`: 캔버스 위에 고화질 텍스트 오버레이 렌더링
+- `applyCanvasPadding(canvas, padding, bgOption, anchor)`: 9방향 기준 캔버스 여백 확장
 
 ---
 
 ## Plan Approval
 
-계획 승인 후 아래 순서로 무결점 구현이 진행됩니다:
-1. `src/utils/imageCropper.ts` 알고리즘 엔진 구현 (모서리 색상 감지, 알파 감지, 바운딩 박스 탐색, 고해상도 캔버스 크롭)
-2. `src/components/ImageCropView.tsx` 2단계 크롭 UI 구현 (8방향 리사이즈 핸들, 딤 마스크, 줌/패닝, 포맷 변환 및 복사/다운로드)
-3. `src/App.tsx` 최상단 1번째 메뉴 배치 및 모바일 네비게이션 탭 동기화
-4. 오프라인 단일 파일(`OmniTools_Offline.html`) 및 `docs/index.html` 최신 빌드 동기화 검증
+계획 승인 시 아래 단계로 구현 및 검증이 진행됩니다:
+1. 상단 헤더에 `Offline HTML 다운로드` 원클릭 버튼 배치 및 다운로드 핸들러 구현
+2. `src/utils/imageStudio.ts` 엔진 작성 (선명도, 모자이크, 리사이징, 캔버스 패딩, 회전, 필터, 텍스트)
+3. `src/components/ImageEditView.tsx` 구현 (좌측 9개 툴바 팔레트 + 인터랙티브 캔버스 + 우측 컨트롤)
+4. `src/components/FileToImageView.tsx` 구현 (PDF + DOCX + PPTX 지원)
+5. `src/App.tsx` 탭 명칭(`Image Edit`, `File to Image`) 및 모바일 네비게이션 연동
+6. 컴파일 검증 및 최신 `OmniTools_Offline.html`, `docs/index.html` 단일 파일 빌드 동기화

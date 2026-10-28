@@ -646,9 +646,11 @@ export const ImageMergeView: React.FC = () => {
                 {images.length > 0 && (
                   <button
                     onClick={handleClearAll}
-                    className="text-[10px] px-2 py-0.5 rounded bg-slate-800 hover:bg-red-500/20 text-slate-400 hover:text-red-300 transition cursor-pointer"
+                    className="text-xs px-2.5 py-1 rounded-lg bg-red-950/40 hover:bg-red-900/60 border border-red-500/30 text-red-300 font-semibold transition flex items-center gap-1 cursor-pointer"
+                    title="등록된 모든 이미지 삭제"
                   >
-                    전체 비우기
+                    <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                    <span>전체 삭제</span>
                   </button>
                 )}
                 {images.length < 6 && (

@@ -1,35 +1,75 @@
 import React, { useState } from 'react';
 import {
-  Scissors,
-  FileImage,
+  Wand2,
+  FileText,
   Timer,
-  Shield,
   Layers,
   SplitSquareHorizontal,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Download,
+  Check
 } from 'lucide-react';
-import { ImageCropView } from './components/ImageCropView';
-import { PdfToImageView } from './components/PdfToImageView';
+import { ImageEditView } from './components/ImageEditView';
+import { FileToImageView } from './components/FileToImageView';
 import { MusicTimerView } from './components/MusicTimerView';
 import { ImageMergeView } from './components/ImageMergeView';
 import { ExcelMergeView } from './components/ExcelMergeView';
 
 export default function App() {
   const isLocalFile = typeof window !== 'undefined' && window.location.protocol === 'file:';
-  const [activeTab, setActiveTab] = useState<'crop' | 'pdf' | 'merge' | 'excel' | 'music'>('crop');
+  const [activeTab, setActiveTab] = useState<'edit' | 'file-to-image' | 'merge' | 'excel' | 'music'>('edit');
+  const [downloadSuccess, setDownloadSuccess] = useState<boolean>(false);
 
   const tabNames: Record<string, string> = {
-    crop: 'Image Crop (자르기)',
-    pdf: 'PDF to Image',
-    merge: 'Image Merge',
-    excel: 'Excel Merge',
-    music: 'Music Timer',
+    edit: 'Image Edit (이미지 편집)',
+    'file-to-image': 'PDF to Image (PDF 변환)',
+    merge: 'Image Merge (이미지 병합)',
+    excel: 'Excel Merge (엑셀 머지)',
+    music: 'Music Timer (음악 타이머)',
+  };
+
+  // One-click Offline HTML Downloader
+  const handleDownloadOfflineHtml = async () => {
+    try {
+      // 1. Try fetching the dedicated standalone OmniTools_Offline.html from server/hosting
+      const resp = await fetch('./OmniTools_Offline.html');
+      if (resp.ok) {
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'OmniTools_Offline.html';
+        a.click();
+        URL.revokeObjectURL(url);
+        setDownloadSuccess(true);
+        setTimeout(() => setDownloadSuccess(false), 2500);
+        return;
+      }
+    } catch {
+      // fallback below
+    }
+
+    // 2. Fallback: Save current rendered document as standalone singlefile HTML
+    try {
+      const htmlContent = '<!doctype html>\n' + document.documentElement.outerHTML;
+      const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'OmniTools_Offline.html';
+      a.click();
+      URL.revokeObjectURL(url);
+      setDownloadSuccess(true);
+      setTimeout(() => setDownloadSuccess(false), 2500);
+    } catch {
+      alert('오프라인 파일 다운로드에 실패했습니다.');
+    }
   };
 
   return (
-    <div className="min-h-screen bg-[#090d16] text-slate-100 flex flex-col selection:bg-indigo-500/30 selection:text-indigo-200">
-      {/* Top Sticky Navigation Bar */}
-      <header className="sticky top-0 z-40 bg-[#090d16]/90 backdrop-blur-md border-b border-slate-800/80">
+    <div className="h-screen max-h-screen overflow-hidden bg-[#090d16] text-slate-100 flex flex-col selection:bg-indigo-500/30 selection:text-indigo-200">
+      {/* Top Navigation Bar */}
+      <header className="shrink-0 z-40 bg-[#090d16]/90 backdrop-blur-md border-b border-slate-800/80">
         <div className="w-full px-3 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between gap-3">
           {/* Logo & Brand */}
           <div className="flex items-center gap-2.5 sm:gap-3">
@@ -42,41 +82,40 @@ export default function App() {
                   OmniTools
                 </span>
                 <span className="px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 whitespace-nowrap">
-                  {isLocalFile ? 'Offline' : 'Serverless'}
+                  {isLocalFile ? 'Offline Edition' : 'Serverless'}
                 </span>
               </div>
-              {/* Mobile current tab indicator */}
               <p className="text-[10px] text-slate-400 truncate md:hidden">
                 {tabNames[activeTab]}
               </p>
             </div>
           </div>
 
-          {/* Desktop Center Tabs: 1st menu is Image Crop */}
+          {/* Desktop Center Tabs */}
           <nav className="hidden md:flex items-center p-1 rounded-xl bg-slate-900 border border-slate-800">
-            {/* 1. Image Crop */}
+            {/* 1. Image Edit */}
             <button
-              onClick={() => setActiveTab('crop')}
+              onClick={() => setActiveTab('edit')}
               className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-                activeTab === 'crop'
+                activeTab === 'edit'
                   ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md shadow-indigo-600/30'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
               }`}
             >
-              <Scissors className="w-4 h-4" />
-              <span>Image Crop</span>
+              <Wand2 className="w-4 h-4" />
+              <span>Image Edit</span>
             </button>
 
             {/* 2. PDF to Image */}
             <button
-              onClick={() => setActiveTab('pdf')}
+              onClick={() => setActiveTab('file-to-image')}
               className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-                activeTab === 'pdf'
+                activeTab === 'file-to-image'
                   ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
               }`}
             >
-              <FileImage className="w-4 h-4" />
+              <FileText className="w-4 h-4" />
               <span>PDF to Image</span>
             </button>
 
@@ -106,7 +145,7 @@ export default function App() {
               <span>Excel Merge</span>
             </button>
 
-            {/* 5. Music Timer (Web only) */}
+            {/* 5. Music Timer */}
             {!isLocalFile && (
               <button
                 onClick={() => setActiveTab('music')}
@@ -122,24 +161,51 @@ export default function App() {
             )}
           </nav>
 
-          {/* Right Status Badge */}
-          <div className="flex items-center gap-2 text-xs text-slate-400 shrink-0">
-            <span className={`w-2 h-2 rounded-full ${isLocalFile ? 'bg-cyan-400' : 'bg-emerald-400'} animate-pulse`} />
-            <span className="text-[11px] sm:text-xs">{isLocalFile ? 'Offline' : 'Client Ready'}</span>
+          {/* Right Area: Offline HTML Download Button & Status Badge */}
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            {/* Top-Right Dedicated Offline HTML Download Button */}
+            <button
+              onClick={handleDownloadOfflineHtml}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md cursor-pointer ${
+                downloadSuccess
+                  ? 'bg-emerald-600 text-white shadow-emerald-600/30'
+                  : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-600/25 border border-emerald-400/40'
+              }`}
+              title="인터넷 없이 평생 사용할 수 있는 단일 HTML 파일로 다운로드"
+            >
+              {downloadSuccess ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-white" />
+                  <span className="hidden sm:inline">다운로드 완료!</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Offline HTML 다운로드</span>
+                  <span className="sm:hidden">Offline HTML</span>
+                </>
+              )}
+            </button>
+
+            {/* Status indicator */}
+            <div className="hidden lg:flex items-center gap-1.5 text-xs text-slate-400">
+              <span className={`w-2 h-2 rounded-full ${isLocalFile ? 'bg-cyan-400' : 'bg-emerald-400'} animate-pulse`} />
+              <span className="text-[11px] font-mono">{isLocalFile ? '100% Offline' : 'Ready'}</span>
+            </div>
           </div>
         </div>
       </header>
 
-      {/* Main Content Area: Keep tabs mounted, extra bottom padding on mobile for bottom tab bar */}
-      <main className="flex-1 w-full px-2.5 sm:px-6 lg:px-8 py-3.5 sm:py-6 pb-24 md:pb-8">
-        {/* 1. Image Crop View */}
-        <div className={activeTab === 'crop' ? 'block' : 'hidden'}>
-          <ImageCropView />
+      {/* Main Content Area */}
+      <main className="flex-1 min-h-0 overflow-y-auto w-full px-2.5 sm:px-6 lg:px-8 py-2.5 sm:py-3.5 pb-20 md:pb-3">
+        {/* 1. Image Edit View */}
+        <div className={activeTab === 'edit' ? 'block' : 'hidden'}>
+          <ImageEditView />
         </div>
 
-        {/* 2. PDF to Image View */}
-        <div className={activeTab === 'pdf' ? 'block' : 'hidden'}>
-          <PdfToImageView />
+        {/* 2. File to Image View (PDF) */}
+        <div className={activeTab === 'file-to-image' ? 'block' : 'hidden'}>
+          <FileToImageView />
         </div>
 
         {/* 3. Image Merge View */}
@@ -160,48 +226,41 @@ export default function App() {
         )}
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-800/60 bg-slate-950/40 text-slate-500 text-xs py-4 sm:py-5 mb-16 md:mb-0">
-        <div className="w-full px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
-          <div className="flex items-center gap-2 text-xs">
-            <Shield className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>서버리스 보안 설계: 모든 파일 처리는 브라우저 내부에서만 안전하게 이루어집니다.</span>
-          </div>
-          <div className="text-slate-400 text-xs">
-            Created by <strong className="font-semibold text-slate-300">NYEONGEON HANN</strong>
-          </div>
+      {/* Floating Pill Badge: Created by NYEONGEON HANN */}
+      <div className="fixed bottom-14 md:bottom-3 right-3 z-40 pointer-events-auto select-none">
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 text-[11px] text-slate-300 shadow-xl backdrop-blur-md font-medium tracking-tight transition cursor-default">
+          <span className="text-slate-400">Created by</span>
+          <span className="font-bold text-slate-100">NYEONGEON HANN</span>
         </div>
-      </footer>
+      </div>
 
-      {/* ========================================================================= */}
-      {/* Mobile Bottom Navigation Bar (Visible only on mobile screens < md)        */}
-      {/* ========================================================================= */}
+      {/* Mobile Bottom Navigation Bar */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#090d16]/95 backdrop-blur-xl border-t border-slate-800/90 shadow-[0_-8px_24px_rgba(0,0,0,0.5)] px-1.5 py-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
         <div className={`grid ${!isLocalFile ? 'grid-cols-5' : 'grid-cols-4'} gap-1 items-center max-w-lg mx-auto`}>
-          {/* Tab 1: Crop */}
+          {/* Tab 1: Image Edit */}
           <button
-            onClick={() => setActiveTab('crop')}
+            onClick={() => setActiveTab('edit')}
             className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition cursor-pointer ${
-              activeTab === 'crop'
+              activeTab === 'edit'
                 ? 'text-indigo-400 font-bold bg-indigo-500/15'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <Scissors className="w-4 h-4 sm:w-5 sm:h-5 mb-0.5" />
-            <span className="text-[9px] sm:text-[10px] leading-tight">자르기</span>
+            <Wand2 className="w-4 h-4 sm:w-5 sm:h-5 mb-0.5" />
+            <span className="text-[9px] sm:text-[10px] leading-tight">편집</span>
           </button>
 
-          {/* Tab 2: PDF */}
+          {/* Tab 2: File to Image */}
           <button
-            onClick={() => setActiveTab('pdf')}
+            onClick={() => setActiveTab('file-to-image')}
             className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition cursor-pointer ${
-              activeTab === 'pdf'
+              activeTab === 'file-to-image'
                 ? 'text-indigo-400 font-bold bg-indigo-500/15'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <FileImage className="w-4 h-4 sm:w-5 sm:h-5 mb-0.5" />
-            <span className="text-[9px] sm:text-[10px] leading-tight">PDF 변환</span>
+            <FileText className="w-4 h-4 sm:w-5 sm:h-5 mb-0.5" />
+            <span className="text-[9px] sm:text-[10px] leading-tight">문서변환</span>
           </button>
 
           {/* Tab 3: Merge */}

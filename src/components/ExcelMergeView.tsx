@@ -298,13 +298,23 @@ export const ExcelMergeView: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             {/* Left 2 Cols: File List with Order Control */}
             <div className="lg:col-span-2 space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-emerald-400" />
-                  <span>업로드된 파일 목록 ({files.length}개)</span>
-                </h3>
-                <span className="text-xs text-slate-400">
-                  첫 번째 파일이 <strong className="text-emerald-400">기준 컬럼</strong>이 됩니다. 순서를 변경하여 기준 파일을 바꿀 수 있습니다.
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-emerald-400" />
+                    <span>업로드된 파일 목록 ({files.length}개)</span>
+                  </h3>
+                  <button
+                    onClick={handleReset}
+                    className="px-2.5 py-1 rounded-lg bg-red-950/40 hover:bg-red-900/60 border border-red-500/30 text-red-300 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                    title="업로드된 모든 엑셀/CSV 파일 삭제"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                    <span>파일 전체 삭제</span>
+                  </button>
+                </div>
+                <span className="text-xs text-slate-400 hidden sm:inline">
+                  첫 번째 파일이 <strong className="text-emerald-400">기준 컬럼</strong>이 됩니다.
                 </span>
               </div>
 

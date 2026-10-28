@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for the 2-step Image Crop feature (Auto Crop + Manual Crop), placed as the first menu in OmniTools with mobile touch support and multi-format export.",
-  "updatedAt":  "2026-10-23T11:16:24.085291284Z",
+  "summary":  "Implementation plan for Image Edit studio with sidebar tool palette, File to Image expansion (PDF, DOCX, PPTX), and top-right Offline HTML downloader button.",
+  "updatedAt":  "2026-10-28T05:24:45.146466169Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
