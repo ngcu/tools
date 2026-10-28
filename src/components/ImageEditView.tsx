@@ -23,7 +23,11 @@ import {
   X,
   ZoomIn,
   ZoomOut,
-  Maximize
+  Maximize,
+  ChevronLeft,
+  ChevronRight,
+  Activity,
+  Eraser
 } from 'lucide-react';
 import {
   CropRect,
@@ -36,7 +40,10 @@ import {
   applyColorAdjustments,
   applyBorderAndRadius,
   applyTextWatermark,
-  cloneCanvas
+  cloneCanvas,
+  generateToneCurveLUT,
+  applyToneCurves,
+  applyBackgroundColorAdjustment
 } from '../utils/imageStudio';
 import { copyImageBlobToClipboard } from '../utils/imageCropper';
 
@@ -46,7 +53,9 @@ type ActiveTool =
   | 'resize'    // 이미지 크기
   | 'canvas'    // 캔버스 크기
   | 'rotate'    // 회전 / 반전
+  | 'bgcolor'   // 배경색 조정 (흰색 배경 투명화 등)
   | 'color'     // 색상 보정
+  | 'curves'    // 톤 커브
   | 'sharpen'   // 선명도
   | 'mosaic'    // 타일링 / 블러
   | 'text'      // 텍스트
@@ -115,6 +124,34 @@ export const ImageEditView: React.FC = () => {
   const [canvasTargetH, setCanvasTargetH] = useState<number>(0);
   const [canvasAnchor, setCanvasAnchor] = useState<{ row: number; col: number }>({ row: 1, col: 1 });
   const [canvasBgColor, setCanvasBgColor] = useState<string>('transparent');
+
+  // Panel Collapse States
+  const [isPaletteCollapsed, setIsPaletteCollapsed] = useState<boolean>(false);
+  const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState<boolean>(false);
+
+  // Tool 4: 회전 / 반전 (Rotate & Fine Angle & Guide Lines)
+  const [fineAngle, setFineAngle] = useState<number>(0);
+  const [showGuidelines, setShowGuidelines] = useState<boolean>(true);
+  const [showGridLines, setShowGridLines] = useState<boolean>(true);
+  const [guideLineYPct, setGuideLineYPct] = useState<number>(50); // horizontal
+  const [guideLineXPct, setGuideLineXPct] = useState<number>(50); // vertical
+  const isDraggingGuideLineY = useRef<boolean>(false);
+  const isDraggingGuideLineX = useRef<boolean>(false);
+
+  // Tool: 배경색 조정 (흰색 배경 투명화 등)
+  const [bgColorTarget, setBgColorTarget] = useState<string>('#ffffff');
+  const [bgColorTolerance, setBgColorTolerance] = useState<number>(18);
+  const [bgColorSmoothness, setBgColorSmoothness] = useState<number>(6);
+  const [bgColorContiguous, setBgColorContiguous] = useState<boolean>(true); // default true for edge background removal
+  const [bgColorReplaceMode, setBgColorReplaceMode] = useState<'transparent' | 'replace'>('transparent');
+  const [bgColorNewColor, setBgColorNewColor] = useState<string>('#ffffff');
+
+  // Tool: 톤 커브 (Curves)
+  const [curveBlacks, setCurveBlacks] = useState<number>(0);
+  const [curveShadows, setCurveShadows] = useState<number>(0);
+  const [curveMidtones, setCurveMidtones] = useState<number>(0);
+  const [curveHighlights, setCurveHighlights] = useState<number>(0);
+  const [curveWhites, setCurveWhites] = useState<number>(255);
 
   // Tool 5: 색상 보정 (Color)
   const [brightness, setBrightness] = useState<number>(0);
@@ -260,8 +297,23 @@ export const ImageEditView: React.FC = () => {
 
     let preview = currentCanvas;
 
-    if (activeTool === 'color' && (brightness !== 0 || contrast !== 0 || saturation !== 0)) {
+    if (activeTool === 'bgcolor') {
+      preview = applyBackgroundColorAdjustment(currentCanvas, {
+        targetColor: bgColorTarget,
+        tolerance: bgColorTolerance,
+        smoothness: bgColorSmoothness,
+        contiguous: bgColorContiguous,
+        replaceMode: bgColorReplaceMode,
+        newColor: bgColorNewColor
+      });
+    } else if (activeTool === 'color' && (brightness !== 0 || contrast !== 0 || saturation !== 0)) {
       preview = applyColorAdjustments(currentCanvas, { brightness, contrast, saturation });
+    } else if (
+      activeTool === 'curves' &&
+      (curveBlacks !== 0 || curveShadows !== 0 || curveMidtones !== 0 || curveHighlights !== 0 || curveWhites !== 255)
+    ) {
+      const lut = generateToneCurveLUT(curveBlacks, curveShadows, curveMidtones, curveHighlights, curveWhites);
+      preview = applyToneCurves(currentCanvas, lut);
     } else if (activeTool === 'sharpen' && sharpenAmount > 0) {
       preview = applySharpen(currentCanvas, sharpenAmount);
     } else if (activeTool === 'border' && (borderRadius > 0 || borderWidth > 0)) {
@@ -290,9 +342,20 @@ export const ImageEditView: React.FC = () => {
   }, [
     currentCanvas,
     activeTool,
+    bgColorTarget,
+    bgColorTolerance,
+    bgColorSmoothness,
+    bgColorContiguous,
+    bgColorReplaceMode,
+    bgColorNewColor,
     brightness,
     contrast,
     saturation,
+    curveBlacks,
+    curveShadows,
+    curveMidtones,
+    curveHighlights,
+    curveWhites,
     sharpenAmount,
     borderRadius,
     borderWidth,
@@ -353,6 +416,17 @@ export const ImageEditView: React.FC = () => {
     setSharpenAmount(0);
     setBorderRadius(0);
     setBorderWidth(0);
+    setFineAngle(0);
+    setCurveBlacks(0);
+    setCurveShadows(0);
+    setCurveMidtones(0);
+    setCurveHighlights(0);
+    setCurveWhites(255);
+    setBgColorTarget('#ffffff');
+    setBgColorTolerance(18);
+    setBgColorSmoothness(6);
+    setBgColorContiguous(true);
+    setBgColorReplaceMode('transparent');
   };
 
   // Delete Image
@@ -363,6 +437,31 @@ export const ImageEditView: React.FC = () => {
     setHistory([]);
     setRedoStack([]);
     setMosaicSelection(null);
+    setFineAngle(0);
+    setCurveBlacks(0);
+    setCurveShadows(0);
+    setCurveMidtones(0);
+    setCurveHighlights(0);
+    setCurveWhites(255);
+    setBgColorTarget('#ffffff');
+    setBgColorTolerance(18);
+    setBgColorSmoothness(6);
+    setBgColorContiguous(true);
+    setBgColorReplaceMode('transparent');
+  };
+
+  const handleApplyBgColor = () => {
+    if (!currentCanvas) return;
+    pushHistory(currentCanvas);
+    const adjusted = applyBackgroundColorAdjustment(currentCanvas, {
+      targetColor: bgColorTarget,
+      tolerance: bgColorTolerance,
+      smoothness: bgColorSmoothness,
+      contiguous: bgColorContiguous,
+      replaceMode: bgColorReplaceMode,
+      newColor: bgColorNewColor
+    });
+    setCurrentCanvas(adjusted);
   };
 
   // -------------------------------------------------------------
@@ -390,6 +489,12 @@ export const ImageEditView: React.FC = () => {
       if (canvasTargetW !== currentCanvas.width || canvasTargetH !== currentCanvas.height) {
         handleApplyCanvasAnchor();
       }
+    } else if (activeTool === 'rotate') {
+      if (fineAngle !== 0) {
+        handleApplyFineRotate();
+      }
+    } else if (activeTool === 'bgcolor') {
+      handleApplyBgColor();
     } else if (activeTool === 'color') {
       if (brightness !== 0 || contrast !== 0 || saturation !== 0) {
         pushHistory(currentCanvas);
@@ -398,6 +503,10 @@ export const ImageEditView: React.FC = () => {
         setBrightness(0);
         setContrast(0);
         setSaturation(0);
+      }
+    } else if (activeTool === 'curves') {
+      if (curveBlacks !== 0 || curveShadows !== 0 || curveMidtones !== 0 || curveHighlights !== 0 || curveWhites !== 255) {
+        handleApplyCurves();
       }
     } else if (activeTool === 'sharpen') {
       if (sharpenAmount > 0) {
@@ -627,7 +736,7 @@ export const ImageEditView: React.FC = () => {
   };
 
   // -------------------------------------------------------------
-  // Tool 4: 회전 / 반전 Handlers (우로 90°, 좌로 90°, 좌우 반전, 상하 반전)
+  // Tool 4: 회전 / 반전 Handlers (1도 미세 회전, 기준선, 90° 회전, 반전)
   // -------------------------------------------------------------
   const handleApplyRotate = (angle: number) => {
     if (!currentCanvas) return;
@@ -641,6 +750,19 @@ export const ImageEditView: React.FC = () => {
     setCropRect({ x: 0, y: 0, width: rotated.width, height: rotated.height });
   };
 
+  const handleApplyFineRotate = () => {
+    if (!currentCanvas || fineAngle === 0) return;
+    pushHistory(currentCanvas);
+    const rotated = applyRotationAndFlip(currentCanvas, fineAngle, false, false);
+    setCurrentCanvas(rotated);
+    setTargetWidth(rotated.width);
+    setTargetHeight(rotated.height);
+    setCanvasTargetW(rotated.width);
+    setCanvasTargetH(rotated.height);
+    setCropRect({ x: 0, y: 0, width: rotated.width, height: rotated.height });
+    setFineAngle(0);
+  };
+
   const handleApplyFlip = (h: boolean, v: boolean) => {
     if (!currentCanvas) return;
     pushHistory(currentCanvas);
@@ -651,6 +773,8 @@ export const ImageEditView: React.FC = () => {
   // Animated Rotation
   const handleApplyRotateWithAnim = (angle: number) => {
     if (!currentCanvas || animTransform.isTransitioning) return;
+    const totalAngle = fineAngle + angle;
+    setFineAngle(0);
     setAnimTransform({
       rotate: angle === 270 ? -90 : angle,
       scaleX: 1,
@@ -658,7 +782,7 @@ export const ImageEditView: React.FC = () => {
       isTransitioning: true
     });
     setTimeout(() => {
-      handleApplyRotate(angle);
+      handleApplyRotate(totalAngle);
       setAnimTransform({
         rotate: 0,
         scaleX: 1,
@@ -686,6 +810,75 @@ export const ImageEditView: React.FC = () => {
         isTransitioning: false
       });
     }, 280);
+  };
+
+  // Guideline pointer handlers (Horizontal & Vertical)
+  const handleGuideLineHPointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    isDraggingGuideLineY.current = true;
+    try {
+      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    } catch {}
+  };
+
+  const handleGuideLineVPointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    isDraggingGuideLineX.current = true;
+    try {
+      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    } catch {}
+  };
+
+  const handleGuideLinePointerMove = (e: React.PointerEvent) => {
+    const canvasEl = displayCanvasRef.current;
+    if (!canvasEl) return;
+    const rect = canvasEl.getBoundingClientRect();
+    if (rect.height <= 0 || rect.width <= 0) return;
+
+    if (isDraggingGuideLineY.current) {
+      const clampedY = Math.max(rect.top, Math.min(rect.bottom, e.clientY));
+      const pct = ((clampedY - rect.top) / rect.height) * 100;
+      setGuideLineYPct(Math.round(Math.max(0, Math.min(100, pct))));
+    }
+
+    if (isDraggingGuideLineX.current) {
+      const clampedX = Math.max(rect.left, Math.min(rect.right, e.clientX));
+      const pct = ((clampedX - rect.left) / rect.width) * 100;
+      setGuideLineXPct(Math.round(Math.max(0, Math.min(100, pct))));
+    }
+  };
+
+  const handleGuideLinePointerUp = (e: React.PointerEvent) => {
+    if (isDraggingGuideLineY.current || isDraggingGuideLineX.current) {
+      isDraggingGuideLineY.current = false;
+      isDraggingGuideLineX.current = false;
+      try {
+        (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+      } catch {}
+    }
+  };
+
+  // Tool: 톤 커브 (Curves) Handler
+  const isCurveModified =
+    curveBlacks !== 0 ||
+    curveShadows !== 0 ||
+    curveMidtones !== 0 ||
+    curveHighlights !== 0 ||
+    curveWhites !== 255;
+
+  const handleApplyCurves = () => {
+    if (!currentCanvas || !isCurveModified) return;
+    pushHistory(currentCanvas);
+    const lut = generateToneCurveLUT(curveBlacks, curveShadows, curveMidtones, curveHighlights, curveWhites);
+    const curved = applyToneCurves(currentCanvas, lut);
+    setCurrentCanvas(curved);
+    setCurveBlacks(0);
+    setCurveShadows(0);
+    setCurveMidtones(0);
+    setCurveHighlights(0);
+    setCurveWhites(255);
   };
 
   // Zoom & Pan Handlers
@@ -900,7 +1093,9 @@ export const ImageEditView: React.FC = () => {
     { id: 'resize', label: '이미지 크기', icon: Scaling },
     { id: 'canvas', label: '캔버스 크기', icon: Maximize2 },
     { id: 'rotate', label: '회전 / 반전', icon: RotateCw },
+    { id: 'bgcolor', label: '배경색 조정', icon: Eraser },
     { id: 'color', label: '색상 보정', icon: Sliders },
+    { id: 'curves', label: '톤 커브', icon: Activity },
     { id: 'sharpen', label: '선명도', icon: Sparkles },
     { id: 'mosaic', label: '타일링 / 블러', icon: Grid },
     { id: 'text', label: '텍스트', icon: Type },
@@ -908,7 +1103,7 @@ export const ImageEditView: React.FC = () => {
   ] as const;
 
   return (
-    <div className="w-full space-y-4">
+    <div className="w-full space-y-2">
       {/* Hidden File Input */}
       <input
         type="file"
@@ -923,14 +1118,14 @@ export const ImageEditView: React.FC = () => {
       />
 
       {/* Top Bar: Title + Actions (Undo, Redo, Reset, Delete, Copy, Save) */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl backdrop-blur-sm">
-        <div className="flex items-center gap-2.5 lg:w-44 shrink-0">
-          <div className="p-1.5 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-            <Scissors className="w-4 h-4" />
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shadow-md backdrop-blur-sm">
+        <div className="flex items-center gap-2 lg:w-44 shrink-0">
+          <div className="p-1 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+            <Scissors className="w-3.5 h-3.5" />
           </div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-base font-bold tracking-tight text-white">Image Edit</h2>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-medium">
+          <div className="flex items-center gap-1.5">
+            <h2 className="text-sm font-bold tracking-tight text-white">Image Edit</h2>
+            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-medium">
               Studio
             </span>
           </div>
@@ -951,7 +1146,6 @@ export const ImageEditView: React.FC = () => {
             >
               <Undo2 className="w-3.5 h-3.5 text-indigo-400" />
               <span className="hidden md:inline">실행 취소</span>
-              {history.length > 0 && <span className="text-[10px] text-slate-400 font-mono">({history.length})</span>}
             </button>
 
             {/* Redo */}
@@ -967,7 +1161,6 @@ export const ImageEditView: React.FC = () => {
             >
               <Redo2 className="w-3.5 h-3.5 text-purple-400" />
               <span className="hidden md:inline">다시 실행</span>
-              {redoStack.length > 0 && <span className="text-[10px] text-slate-400 font-mono">({redoStack.length})</span>}
             </button>
 
             {/* Reset */}
@@ -1065,237 +1258,360 @@ export const ImageEditView: React.FC = () => {
           </div>
         </div>
       ) : (
-        /* Workspace Layout: Left Palette (w-44) + Center Viewport (flex-1) + Right Options (w-64) */
-        <div className="flex flex-col lg:flex-row gap-3 items-start w-full">
+        /* Workspace Layout: Full Canvas Viewport (Behind) + Floating Left Palette + Floating Right Options */
+        <div className="relative w-full h-[calc(100vh-125px)] min-h-[420px] rounded-2xl bg-slate-950/85 border border-slate-800 shadow-2xl overflow-hidden select-none">
           {/* ========================================================================= */}
-          {/* 1. LEFT: Slim Tool Palette (w-44)                                         */}
+          {/* 1. FULL CANVAS VIEWPORT: Edge-to-Edge Canvas Area Behind Floating Panels  */}
           {/* ========================================================================= */}
-          <div className="w-full lg:w-44 shrink-0 p-2 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-2.5 max-h-[calc(100vh-130px)] overflow-y-auto">
-            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-2 py-0.5 border-b border-slate-800/80 flex items-center justify-between">
-              <span>도구 팔레트</span>
-              <span className="text-[9px] text-indigo-400 font-mono">9 Tools</span>
-            </div>
-
-            <div className="grid grid-cols-3 lg:grid-cols-1 gap-1">
-              {PALETTE_TOOLS.map((tool) => {
-                const IconComponent = tool.icon;
-                const isSelected = activeTool === tool.id;
-                return (
-                  <button
-                    key={tool.id}
-                    onClick={() => handleSelectTool(tool.id as ActiveTool)}
-                    className={`flex items-center gap-2 w-full p-2 rounded-xl text-left transition-all cursor-pointer ${
-                      isSelected
-                        ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md shadow-indigo-600/25 border border-indigo-400/50'
-                        : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60 border border-transparent'
-                    }`}
-                  >
-                    <IconComponent className="w-4 h-4 shrink-0" />
-                    <span className="text-xs font-semibold leading-tight truncate">{tool.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
-              <div className="p-2 rounded-xl bg-slate-950/70 border border-slate-800/80 text-[11px] font-mono space-y-0.5">
-                <div className="text-[10px] text-slate-400">캔버스 해상도</div>
-                <div className="font-bold text-white tracking-tight">
-                  {currentCanvas.width} × {currentCanvas.height} px
-                </div>
-              </div>
-
-              <div className="text-[10px] text-center text-slate-400 px-2 py-1.5 rounded-lg bg-slate-950/50 border border-slate-800/60 leading-tight">
-                <kbd className="px-1 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[9px] border border-slate-700">Ctrl+V</kbd> 새 이미지 교체
-              </div>
-            </div>
-          </div>
-
-          {/* ========================================================================= */}
-          {/* 2. CENTER: Maximized Interactive Canvas Viewport (flex-1)                 */}
-          {/* ========================================================================= */}
-          <div className="flex-1 min-w-0 w-full space-y-2">
+          <div
+            ref={viewportContainerRef}
+            onPointerDown={(e) => {
+              handleViewportPointerDown(e);
+              handleViewportBgPointerDown(e);
+            }}
+            onPointerMove={(e) => {
+              handleViewportPointerMove(e);
+              handleViewportBgPointerMove(e);
+              handleGuideLinePointerMove(e);
+            }}
+            onPointerUp={(e) => {
+              handleViewportPointerUp(e);
+              handleViewportBgPointerUp(e);
+              handleGuideLinePointerUp(e);
+            }}
+            onWheel={handleWheelZoom}
+            className={`absolute inset-0 flex items-center justify-center overflow-hidden p-2 sm:p-4 select-none ${
+              activeTool === 'mosaic' ? 'cursor-crosshair' : zoomLevel > 1 ? 'cursor-grab active:cursor-grabbing' : ''
+            }`}
+          >
+            {/* Checkerboard transparency grid */}
             <div
-              ref={viewportContainerRef}
-              onPointerDown={(e) => {
-                handleViewportPointerDown(e);
-                handleViewportBgPointerDown(e);
+              className="absolute inset-0 opacity-15 pointer-events-none"
+              style={{
+                backgroundImage: `linear-gradient(45deg, #475569 25%, transparent 25%), linear-gradient(-45deg, #475569 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #475569 75%), linear-gradient(-45deg, transparent 75%, #475569 75%)`,
+                backgroundSize: '16px 16px',
+                backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px'
               }}
-              onPointerMove={(e) => {
-                handleViewportPointerMove(e);
-                handleViewportBgPointerMove(e);
+            />
+
+            {/* Main Canvas Container with Smooth Animated Transform and Zoom/Pan */}
+            <div
+              className="relative inline-block max-w-full max-h-full will-change-transform"
+              style={{
+                transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomLevel}) rotate(${fineAngle + animTransform.rotate}deg) scale(${animTransform.scaleX}, ${animTransform.scaleY})`,
+                transition: animTransform.isTransitioning
+                  ? 'transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1)'
+                  : 'none',
+                transformOrigin: 'center center'
               }}
-              onPointerUp={(e) => {
-                handleViewportPointerUp(e);
-                handleViewportBgPointerUp(e);
-              }}
-              onWheel={handleWheelZoom}
-              className={`relative rounded-2xl bg-slate-950/85 border border-slate-800 shadow-2xl overflow-hidden p-2 sm:p-4 flex items-center justify-center min-h-[460px] max-h-[calc(100vh-130px)] select-none ${
-                activeTool === 'mosaic' ? 'cursor-crosshair' : zoomLevel > 1 ? 'cursor-grab active:cursor-grabbing' : ''
-              }`}
             >
-              {/* Checkerboard transparency grid */}
-              <div
-                className="absolute inset-0 opacity-15 pointer-events-none"
-                style={{
-                  backgroundImage: `linear-gradient(45deg, #475569 25%, transparent 25%), linear-gradient(-45deg, #475569 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #475569 75%), linear-gradient(-45deg, transparent 75%, #475569 75%)`,
-                  backgroundSize: '16px 16px',
-                  backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px'
-                }}
+              <canvas
+                ref={displayCanvasRef}
+                className="block max-w-full max-h-[calc(100vh-140px)] object-contain rounded shadow"
               />
 
-              {/* Main Canvas Container with Smooth Animated Transform and Zoom/Pan */}
-              <div
-                className="relative inline-block max-w-full max-h-[calc(100vh-150px)] will-change-transform"
-                style={{
-                  transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomLevel}) rotate(${animTransform.rotate}deg) scale(${animTransform.scaleX}, ${animTransform.scaleY})`,
-                  transition: animTransform.isTransitioning
-                    ? 'transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1)'
-                    : 'transform 75ms ease-out',
-                  transformOrigin: 'center center'
-                }}
-              >
-                <canvas
-                  ref={displayCanvasRef}
-                  className="block max-w-full max-h-[calc(100vh-150px)] object-contain rounded shadow"
-                />
+              {/* Crop Overlay & 8 Handles */}
+              {activeTool === 'crop' && (
+                <>
+                  <div className="absolute left-0 right-0 top-0 bg-slate-950/75 pointer-events-none" style={{ height: `${cropTopPct}%` }} />
+                  <div className="absolute left-0 right-0 bottom-0 bg-slate-950/75 pointer-events-none" style={{ height: `${Math.max(0, 100 - (cropTopPct + cropHeightPct))}%` }} />
+                  <div className="absolute left-0 bg-slate-950/75 pointer-events-none" style={{ top: `${cropTopPct}%`, height: `${cropHeightPct}%`, width: `${cropLeftPct}%` }} />
+                  <div className="absolute right-0 bg-slate-950/75 pointer-events-none" style={{ top: `${cropTopPct}%`, height: `${cropHeightPct}%`, width: `${Math.max(0, 100 - (cropLeftPct + cropWidthPct))}%` }} />
 
-                {/* Crop Overlay & 8 Handles */}
-                {activeTool === 'crop' && (
-                  <>
-                    <div className="absolute left-0 right-0 top-0 bg-slate-950/75 pointer-events-none" style={{ height: `${cropTopPct}%` }} />
-                    <div className="absolute left-0 right-0 bottom-0 bg-slate-950/75 pointer-events-none" style={{ height: `${Math.max(0, 100 - (cropTopPct + cropHeightPct))}%` }} />
-                    <div className="absolute left-0 bg-slate-950/75 pointer-events-none" style={{ top: `${cropTopPct}%`, height: `${cropHeightPct}%`, width: `${cropLeftPct}%` }} />
-                    <div className="absolute right-0 bg-slate-950/75 pointer-events-none" style={{ top: `${cropTopPct}%`, height: `${cropHeightPct}%`, width: `${Math.max(0, 100 - (cropLeftPct + cropWidthPct))}%` }} />
-
-                    <div
-                      onPointerDown={(e) => handleCropHandlePointerDown(e, 'move')}
-                      onPointerMove={handleCropHandlePointerMove}
-                      onPointerUp={handleCropHandlePointerUp}
-                      className="absolute border-2 border-indigo-400 shadow-[0_0_0_1px_rgba(0,0,0,0.6),0_0_14px_rgba(99,102,241,0.35)] cursor-move group"
-                      style={{
-                        left: `${cropLeftPct}%`,
-                        top: `${cropTopPct}%`,
-                        width: `${cropWidthPct}%`,
-                        height: `${cropHeightPct}%`
-                      }}
-                    >
-                      <div className="absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded bg-slate-950/95 text-[10px] font-mono text-indigo-300 border border-indigo-500/40 whitespace-nowrap shadow pointer-events-none">
-                        {cropRect.width} × {cropRect.height} px
-                      </div>
-
-                      {/* 8 Handles */}
-                      <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'nw')} className="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-nwse-resize hover:scale-125 transition-transform" />
-                      <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'n')} className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-ns-resize hover:scale-125 transition-transform" />
-                      <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'ne')} className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-nesw-resize hover:scale-125 transition-transform" />
-                      <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'e')} className="absolute top-1/2 -translate-y-1/2 -right-1.5 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-ew-resize hover:scale-125 transition-transform" />
-                      <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'se')} className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-nwse-resize hover:scale-125 transition-transform" />
-                      <div onPointerDown={(e) => handleCropHandlePointerDown(e, 's')} className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-ns-resize hover:scale-125 transition-transform" />
-                      <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'sw')} className="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-nesw-resize hover:scale-125 transition-transform" />
-                      <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'w')} className="absolute top-1/2 -translate-y-1/2 -left-1.5 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-ew-resize hover:scale-125 transition-transform" />
-                    </div>
-                  </>
-                )}
-
-                {/* Clean Draggable Text Box without banners */}
-                {activeTool === 'text' && (
                   <div
-                    onPointerDown={handleTextOverlayPointerDown}
-                    onPointerMove={handleTextOverlayPointerMove}
-                    onPointerUp={handleTextOverlayPointerUp}
-                    className="absolute z-20 cursor-move border border-dashed border-indigo-400 select-none shadow-2xl"
+                    onPointerDown={(e) => handleCropHandlePointerDown(e, 'move')}
+                    onPointerMove={handleCropHandlePointerMove}
+                    onPointerUp={handleCropHandlePointerUp}
+                    className="absolute border-2 border-indigo-400 shadow-[0_0_0_1px_rgba(0,0,0,0.6),0_0_14px_rgba(99,102,241,0.35)] cursor-move group"
                     style={{
-                      left: `${textLeftPct}%`,
-                      top: `${textTopPct}%`,
-                      transform: 'translate(-10px, -24px)',
-                      backgroundColor: hasTextBg ? textBgColor : 'rgba(15, 23, 42, 0.4)',
-                      borderRadius: hasTextBg ? `${textBorderRadius}px` : '4px',
-                      borderWidth: hasTextBg && textBorderWidth > 0 ? `${textBorderWidth}px` : undefined,
-                      borderColor: hasTextBg && textBorderWidth > 0 ? textBorderColor : undefined,
-                      padding: '6px 12px'
+                      left: `${cropLeftPct}%`,
+                      top: `${cropTopPct}%`,
+                      width: `${cropWidthPct}%`,
+                      height: `${cropHeightPct}%`
                     }}
                   >
-                    <div
-                      style={{
-                        fontFamily: textFont,
-                        fontSize: `${Math.max(12, Math.round(textSize * 0.7))}px`,
-                        color: textColor,
-                        opacity: textOpacity,
-                        fontWeight: 'bold',
-                        lineHeight: 1.2
-                      }}
-                      className="whitespace-nowrap"
-                    >
-                      {textString || '(텍스트)'}
+                    <div className="absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded bg-slate-950/95 text-[10px] font-mono text-indigo-300 border border-indigo-500/40 whitespace-nowrap shadow pointer-events-none">
+                      {cropRect.width} × {cropRect.height} px
                     </div>
+
+                    {/* 8 Handles */}
+                    <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'nw')} className="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-nwse-resize hover:scale-125 transition-transform" />
+                    <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'n')} className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-ns-resize hover:scale-125 transition-transform" />
+                    <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'ne')} className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-nesw-resize hover:scale-125 transition-transform" />
+                    <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'e')} className="absolute top-1/2 -translate-y-1/2 -right-1.5 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-ew-resize hover:scale-125 transition-transform" />
+                    <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'se')} className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-nwse-resize hover:scale-125 transition-transform" />
+                    <div onPointerDown={(e) => handleCropHandlePointerDown(e, 's')} className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-ns-resize hover:scale-125 transition-transform" />
+                    <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'sw')} className="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-nesw-resize hover:scale-125 transition-transform" />
+                    <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'w')} className="absolute top-1/2 -translate-y-1/2 -left-1.5 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-ew-resize hover:scale-125 transition-transform" />
                   </div>
-                )}
-              </div>
+                </>
+              )}
 
-              {/* Floating Zoom Control Bar (Bottom-Right) */}
-              <div className="absolute bottom-3 right-3 z-30 flex items-center gap-1.5 p-1.5 rounded-xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md text-xs select-none">
-                <button
-                  onClick={() => setZoomLevel((prev) => Math.max(0.25, Number((prev - 0.25).toFixed(2))))}
-                  className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
-                  title="축소 (Zoom Out)"
-                >
-                  <ZoomOut className="w-3.5 h-3.5" />
-                </button>
-
-                <button
-                  onClick={() => {
-                    setZoomLevel(1.0);
-                    setPanOffset({ x: 0, y: 0 });
+              {/* Clean Draggable Text Box without banners */}
+              {activeTool === 'text' && (
+                <div
+                  onPointerDown={handleTextOverlayPointerDown}
+                  onPointerMove={handleTextOverlayPointerMove}
+                  onPointerUp={handleTextOverlayPointerUp}
+                  className="absolute z-20 cursor-move border border-dashed border-indigo-400 select-none shadow-2xl"
+                  style={{
+                    left: `${textLeftPct}%`,
+                    top: `${textTopPct}%`,
+                    transform: 'translate(-10px, -24px)',
+                    backgroundColor: hasTextBg ? textBgColor : 'rgba(15, 23, 42, 0.4)',
+                    borderRadius: hasTextBg ? `${textBorderRadius}px` : '4px',
+                    borderWidth: hasTextBg && textBorderWidth > 0 ? `${textBorderWidth}px` : undefined,
+                    borderColor: hasTextBg && textBorderWidth > 0 ? textBorderColor : undefined,
+                    padding: '6px 12px'
                   }}
-                  className="px-2 py-0.5 rounded-lg font-mono font-bold text-[11px] text-indigo-300 hover:bg-slate-800 transition cursor-pointer"
-                  title="100% 원본 크기"
                 >
-                  {Math.round(zoomLevel * 100)}%
-                </button>
+                  <div
+                    style={{
+                      fontFamily: textFont,
+                      fontSize: `${Math.max(12, Math.round(textSize * 0.7))}px`,
+                      color: textColor,
+                      opacity: textOpacity,
+                      fontWeight: 'bold',
+                      lineHeight: 1.2
+                    }}
+                    className="whitespace-nowrap"
+                  >
+                    {textString || '(텍스트)'}
+                  </div>
+                </div>
+              )}
 
-                <button
-                  onClick={() => setZoomLevel((prev) => Math.min(5.0, Number((prev + 0.25).toFixed(2))))}
-                  className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
-                  title="확대 (Zoom In)"
-                >
-                  <ZoomIn className="w-3.5 h-3.5" />
-                </button>
+              {/* Guidelines Overlay anchored directly to Image (Grid + Draggable Horizontal & Vertical Baselines) */}
+              {activeTool === 'rotate' && (
+                <div className="absolute inset-0 pointer-events-none select-none z-20">
+                  {/* Subtle Grid Lines on image */}
+                  {showGridLines && (
+                    <div
+                      className="absolute inset-0 pointer-events-none opacity-25"
+                      style={{
+                        backgroundImage: `linear-gradient(to right, rgba(99, 102, 241, 0.6) 1px, transparent 1px), linear-gradient(to bottom, rgba(99, 102, 241, 0.6) 1px, transparent 1px)`,
+                        backgroundSize: '40px 40px'
+                      }}
+                    />
+                  )}
 
-                <div className="h-3 w-px bg-slate-700 mx-0.5" />
+                  {/* Draggable Horizontal & Vertical Reference Baselines anchored to image */}
+                  {showGuidelines && (
+                    <>
+                      {/* Horizontal Baseline (Fixed position relative to image, level reference) */}
+                      <div
+                        style={{
+                          top: `${guideLineYPct}%`,
+                          left: '-100vw',
+                          right: '-100vw',
+                          transform: `rotate(${-fineAngle}deg)`,
+                          transformOrigin: `${guideLineXPct}% center`
+                        }}
+                        className="absolute -translate-y-1/2 pointer-events-auto cursor-ns-resize group z-30 py-2.5"
+                        onPointerDown={handleGuideLineHPointerDown}
+                        title="가로 기준선 (이미지 기준 동일 위치 고정, 드래그하여 이동)"
+                      >
+                        <div className="w-full h-0.5 bg-gradient-to-r from-amber-400 via-amber-300 to-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.9)] group-hover:h-1 transition-all" />
+                      </div>
 
-                <button
-                  onClick={() => {
-                    setZoomLevel(1.0);
-                    setPanOffset({ x: 0, y: 0 });
-                  }}
-                  className="px-2 py-1 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white text-[10px] font-semibold transition cursor-pointer flex items-center gap-1"
-                  title="화면 맞춤 (Fit to Viewport)"
-                >
-                  <Maximize className="w-3 h-3 text-indigo-400" />
-                  <span>화면 맞춤</span>
-                </button>
-              </div>
+                      {/* Vertical Baseline (Fixed position relative to image, plumb reference) */}
+                      <div
+                        style={{
+                          left: `${guideLineXPct}%`,
+                          top: '-100vh',
+                          bottom: '-100vh',
+                          transform: `rotate(${-fineAngle}deg)`,
+                          transformOrigin: `center ${guideLineYPct}%`
+                        }}
+                        className="absolute -translate-x-1/2 pointer-events-auto cursor-ew-resize group z-30 px-2.5"
+                        onPointerDown={handleGuideLineVPointerDown}
+                        title="세로 기준선 (이미지 기준 동일 위치 고정, 드래그하여 이동)"
+                      >
+                        <div className="h-full w-0.5 bg-gradient-to-b from-cyan-400 via-cyan-300 to-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.9)] group-hover:w-1 transition-all" />
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Floating Zoom Control Bar (Bottom-Center) */}
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 p-1.5 rounded-xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md text-xs select-none">
+              <button
+                onClick={() => setZoomLevel((prev) => Math.max(0.25, Number((prev - 0.25).toFixed(2))))}
+                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
+                title="축소 (Zoom Out)"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                onClick={() => {
+                  setZoomLevel(1.0);
+                  setPanOffset({ x: 0, y: 0 });
+                }}
+                className="px-2 py-0.5 rounded-lg font-mono font-bold text-[11px] text-indigo-300 hover:bg-slate-800 transition cursor-pointer"
+                title="100% 원본 크기"
+              >
+                {Math.round(zoomLevel * 100)}%
+              </button>
+
+              <button
+                onClick={() => setZoomLevel((prev) => Math.min(5.0, Number((prev + 0.25).toFixed(2))))}
+                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
+                title="확대 (Zoom In)"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+
+              <div className="h-3 w-px bg-slate-700 mx-0.5" />
+
+              <button
+                onClick={() => {
+                  setZoomLevel(1.0);
+                  setPanOffset({ x: 0, y: 0 });
+                }}
+                className="px-2 py-1 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white text-[10px] font-semibold transition cursor-pointer flex items-center gap-1"
+                title="화면 맞춤 (Fit to Viewport)"
+              >
+                <Maximize className="w-3 h-3 text-indigo-400" />
+                <span>화면 맞춤</span>
+              </button>
             </div>
           </div>
 
           {/* ========================================================================= */}
-          {/* 3. RIGHT: Active Tool Settings                                            */}
+          {/* 2. FLOATING LEFT PALETTE (Overlaid on canvas)                             */}
           {/* ========================================================================= */}
-          <div className="w-full lg:w-64 shrink-0 space-y-3">
-            <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-md space-y-3.5 max-h-[calc(100vh-130px)] overflow-y-auto pb-8">
-              {/* Header: Tool Label + '변경 적용' Button */}
-              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-                <span className="text-xs font-bold text-slate-300">
-                  {PALETTE_TOOLS.find((t) => t.id === activeTool)?.label}
-                </span>
-                <button
-                  onClick={handleApplyCurrentTool}
-                  className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-bold text-xs shadow-md shadow-indigo-600/25 transition cursor-pointer flex items-center gap-1.5"
-                >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>변경 적용</span>
-                </button>
-              </div>
+          <div className="absolute left-3 top-3 bottom-3 z-30 pointer-events-none flex flex-col justify-start">
+            <div className="pointer-events-auto">
+              {isPaletteCollapsed ? (
+                <div className="w-12 shrink-0 p-1.5 rounded-2xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md flex flex-col items-center gap-1.5 max-h-[calc(100vh-145px)] overflow-y-auto">
+                  <button
+                    onClick={() => setIsPaletteCollapsed(false)}
+                    className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer mb-1 border-b border-slate-800 w-full flex justify-center"
+                    title="도구 팔레트 펼치기"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                  {PALETTE_TOOLS.map((tool) => {
+                    const IconComponent = tool.icon;
+                    const isSelected = activeTool === tool.id;
+                    return (
+                      <button
+                        key={tool.id}
+                        onClick={() => handleSelectTool(tool.id as ActiveTool)}
+                        className={`p-2 rounded-xl transition cursor-pointer relative group flex justify-center ${
+                          isSelected
+                            ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                        }`}
+                        title={tool.label}
+                      >
+                        <IconComponent className="w-4 h-4 shrink-0" />
+                        <span className="absolute left-full ml-2 px-2 py-1 rounded bg-slate-900 text-white text-[10px] whitespace-nowrap shadow-xl border border-slate-700 hidden group-hover:block z-50 pointer-events-none">
+                          {tool.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="w-44 shrink-0 p-2 rounded-2xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md space-y-2 max-h-[calc(100vh-145px)] overflow-y-auto">
+                  <div className="text-[10px] font-bold text-slate-400 px-2 py-0.5 border-b border-slate-800/80 flex items-center justify-between">
+                    <span>도구 팔레트</span>
+                    <button
+                      onClick={() => setIsPaletteCollapsed(true)}
+                      className="p-1 rounded-md hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+                      title="도구 팔레트 접기"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-1">
+                    {PALETTE_TOOLS.map((tool) => {
+                      const IconComponent = tool.icon;
+                      const isSelected = activeTool === tool.id;
+                      return (
+                        <button
+                          key={tool.id}
+                          onClick={() => handleSelectTool(tool.id as ActiveTool)}
+                          className={`flex items-center gap-2 w-full p-2 rounded-xl text-left transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md shadow-indigo-600/25 border border-indigo-400/50'
+                              : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60 border border-transparent'
+                          }`}
+                        >
+                          <IconComponent className="w-4 h-4 shrink-0" />
+                          <span className="text-xs font-semibold leading-tight truncate">{tool.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
+                    <div className="p-2 rounded-xl bg-slate-950/70 border border-slate-800/80 text-[11px] font-mono space-y-0.5">
+                      <div className="text-[10px] text-slate-400">캔버스 해상도</div>
+                      <div className="font-bold text-white tracking-tight">
+                        {currentCanvas.width} × {currentCanvas.height} px
+                      </div>
+                    </div>
+
+                    <div className="text-[10px] text-center text-slate-400 px-2 py-1.5 rounded-lg bg-slate-950/50 border border-slate-800/60 leading-tight">
+                      <kbd className="px-1 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[9px] border border-slate-700">Ctrl+V</kbd> 새 이미지 교체
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ========================================================================= */}
+          {/* 3. FLOATING RIGHT OPTIONS PANEL (Overlaid on canvas)                      */}
+          {/* ========================================================================= */}
+          <div className="absolute right-3 top-3 bottom-3 z-30 pointer-events-none flex flex-col justify-start">
+            <div className="pointer-events-auto">
+              {isRightPanelCollapsed ? (
+                <div className="w-10 shrink-0 flex flex-col items-center py-2.5 rounded-2xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md max-h-[calc(100vh-145px)] gap-3">
+                  <button
+                    onClick={() => setIsRightPanelCollapsed(false)}
+                    className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
+                    title="옵션 패널 펼치기"
+                  >
+                    <ChevronLeft className="w-4 h-4 text-indigo-400" />
+                  </button>
+                  <button
+                    onClick={handleApplyCurrentTool}
+                    className="p-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/40 transition cursor-pointer"
+                    title="변경 적용"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                  <div className="[writing-mode:vertical-rl] text-[10px] font-semibold text-slate-500 tracking-wider py-2 select-none">
+                    설정 패널
+                  </div>
+                </div>
+              ) : (
+                <div className="w-72 sm:w-80 shrink-0 space-y-3">
+                  <div className="p-3.5 rounded-2xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md space-y-3 max-h-[calc(100vh-145px)] overflow-y-auto pb-8">
+                    {/* Header: '변경 적용' on Left + Minimize Button on Right (No Title!) */}
+                    <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                      <button
+                        onClick={handleApplyCurrentTool}
+                        className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-bold text-xs shadow-md shadow-indigo-600/25 transition cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>변경 적용</span>
+                      </button>
+                      <button
+                        onClick={() => setIsRightPanelCollapsed(true)}
+                        className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+                        title="옵션 패널 접기"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
 
               {/* ---------------- Tool 1: 자르기 ---------------- */}
               {activeTool === 'crop' && (
@@ -1389,24 +1705,30 @@ export const ImageEditView: React.FC = () => {
                       onChange={(e) => setLockAspect(e.target.checked)}
                       className="accent-indigo-500 rounded"
                     />
-                    <span>종횡 비율 고정 (Keep Aspect Ratio)</span>
+                    <span>비율 고정</span>
                   </label>
 
-                  <div className="grid grid-cols-4 gap-1.5 pt-1">
+                  <div className="grid grid-cols-4 gap-1 pt-1">
                     {[
-                      { label: '25%', factor: 0.25 },
-                      { label: '50%', factor: 0.5 },
-                      { label: '75%', factor: 0.75 },
-                      { label: '200%', factor: 2.0 },
+                      { label: '20%', factor: 0.20 },
+                      { label: '40%', factor: 0.40 },
+                      { label: '60%', factor: 0.60 },
+                      { label: '80%', factor: 0.80 },
+                      { label: '125%', factor: 1.25 },
+                      { label: '150%', factor: 1.50 },
+                      { label: '175%', factor: 1.75 },
+                      { label: '200%', factor: 2.00 },
                     ].map((p) => (
                       <button
                         key={p.label}
                         onClick={() => {
                           if (!currentCanvas) return;
-                          setTargetWidth(Math.round(currentCanvas.width * p.factor));
-                          setTargetHeight(Math.round(currentCanvas.height * p.factor));
+                          const baseW = originalCanvas?.width || currentCanvas.width;
+                          const baseH = originalCanvas?.height || currentCanvas.height;
+                          setTargetWidth(Math.round(baseW * p.factor));
+                          setTargetHeight(Math.round(baseH * p.factor));
                         }}
-                        className="py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition cursor-pointer"
+                        className="py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-semibold border border-slate-700 transition cursor-pointer"
                       >
                         {p.label}
                       </button>
@@ -1506,44 +1828,472 @@ export const ImageEditView: React.FC = () => {
                 </div>
               )}
 
-              {/* ---------------- Tool 4: 회전 / 반전 (우로 90°, 좌로 90°, 좌우 반전, 상하 반전) ---------------- */}
+              {/* ---------------- Tool 4: 회전 / 반전 (버튼 우선 배치, 각도 조절, 기준선/격자망) ---------------- */}
               {activeTool === 'rotate' && (
-                <div className="space-y-2 text-xs">
-                  <button
-                    onClick={() => handleApplyRotateWithAnim(90)}
-                    disabled={animTransform.isTransitioning}
-                    className="w-full py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-slate-700 flex items-center gap-3 cursor-pointer transition disabled:opacity-50"
-                  >
-                    <RotateCw className="w-4 h-4 text-indigo-400 shrink-0" />
-                    <span>우로 90° 회전</span>
-                  </button>
+                <div className="space-y-3 text-xs">
+                  {/* 1. 90-degree Rotation & Flipping Buttons (1列 세로 배열 우선 배치) */}
+                  <div className="space-y-1.5">
+                    <button
+                      onClick={() => handleApplyRotateWithAnim(90)}
+                      disabled={animTransform.isTransitioning}
+                      className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-slate-700 flex items-center gap-2.5 cursor-pointer transition disabled:opacity-50"
+                    >
+                      <RotateCw className="w-4 h-4 text-indigo-400 shrink-0" />
+                      <span>우로 90° 회전</span>
+                    </button>
 
-                  <button
-                    onClick={() => handleApplyRotateWithAnim(270)}
-                    disabled={animTransform.isTransitioning}
-                    className="w-full py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-slate-700 flex items-center gap-3 cursor-pointer transition disabled:opacity-50"
-                  >
-                    <RotateCcw className="w-4 h-4 text-indigo-400 shrink-0" />
-                    <span>좌로 90° 회전</span>
-                  </button>
+                    <button
+                      onClick={() => handleApplyRotateWithAnim(270)}
+                      disabled={animTransform.isTransitioning}
+                      className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-slate-700 flex items-center gap-2.5 cursor-pointer transition disabled:opacity-50"
+                    >
+                      <RotateCcw className="w-4 h-4 text-indigo-400 shrink-0" />
+                      <span>좌로 90° 회전</span>
+                    </button>
 
-                  <button
-                    onClick={() => handleApplyFlipWithAnim(true, false)}
-                    disabled={animTransform.isTransitioning}
-                    className="w-full py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-slate-700 flex items-center gap-3 cursor-pointer transition disabled:opacity-50"
-                  >
-                    <FlipHorizontal className="w-4 h-4 text-purple-400 shrink-0" />
-                    <span>좌우 반전</span>
-                  </button>
+                    <button
+                      onClick={() => handleApplyFlipWithAnim(true, false)}
+                      disabled={animTransform.isTransitioning}
+                      className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-slate-700 flex items-center gap-2.5 cursor-pointer transition disabled:opacity-50"
+                    >
+                      <FlipHorizontal className="w-4 h-4 text-purple-400 shrink-0" />
+                      <span>좌우 반전</span>
+                    </button>
 
-                  <button
-                    onClick={() => handleApplyFlipWithAnim(false, true)}
-                    disabled={animTransform.isTransitioning}
-                    className="w-full py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-slate-700 flex items-center gap-3 cursor-pointer transition disabled:opacity-50"
-                  >
-                    <FlipVertical className="w-4 h-4 text-purple-400 shrink-0" />
-                    <span>상하 반전</span>
-                  </button>
+                    <button
+                      onClick={() => handleApplyFlipWithAnim(false, true)}
+                      disabled={animTransform.isTransitioning}
+                      className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-slate-700 flex items-center gap-2.5 cursor-pointer transition disabled:opacity-50"
+                    >
+                      <FlipVertical className="w-4 h-4 text-purple-400 shrink-0" />
+                      <span>상하 반전</span>
+                    </button>
+                  </div>
+
+                  {/* 2. 각도 조절 (0.1도 단위 슬라이더 & 미세 조정 버튼 & 직접 입력) */}
+                  <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-slate-300">각도 조절</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          min="-180"
+                          max="180"
+                          step="0.1"
+                          value={fineAngle}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            setFineAngle(isNaN(val) ? 0 : Number(Math.max(-180, Math.min(180, val)).toFixed(1)));
+                          }}
+                          className="w-16 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-center text-indigo-300 font-mono font-bold text-xs focus:outline-none focus:border-indigo-500"
+                        />
+                        <span className="text-slate-400 font-bold text-xs">°</span>
+                      </div>
+                    </div>
+
+                    {/* Slider (-45.0° ~ +45.0°, step 0.1) */}
+                    <input
+                      type="range"
+                      min="-45"
+                      max="45"
+                      step="0.1"
+                      value={fineAngle}
+                      onChange={(e) => setFineAngle(Number(parseFloat(e.target.value).toFixed(1)))}
+                      className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                    />
+
+                    {/* Stepper Buttons: 0.1도 및 1도 단위 미세 제어 */}
+                    <div className="grid grid-cols-7 gap-1">
+                      <button
+                        onClick={() => setFineAngle((prev) => Number(Math.max(-180, prev - 5).toFixed(1)))}
+                        className="py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-mono font-semibold transition cursor-pointer"
+                        title="5도 반시계 회전"
+                      >
+                        -5°
+                      </button>
+                      <button
+                        onClick={() => setFineAngle((prev) => Number(Math.max(-180, prev - 1).toFixed(1)))}
+                        className="py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-mono font-semibold transition cursor-pointer"
+                        title="1도 반시계 회전"
+                      >
+                        -1°
+                      </button>
+                      <button
+                        onClick={() => setFineAngle((prev) => Number(Math.max(-180, prev - 0.1).toFixed(1)))}
+                        className="py-1 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 text-[10px] font-mono font-semibold transition cursor-pointer"
+                        title="0.1도 미세 반시계 회전"
+                      >
+                        -0.1°
+                      </button>
+                      <button
+                        onClick={() => setFineAngle(0)}
+                        className={`py-1 rounded text-[10px] font-semibold transition cursor-pointer ${
+                          fineAngle !== 0
+                            ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-600/50'
+                            : 'bg-slate-800/60 text-slate-500'
+                        }`}
+                        title="0도로 원위치"
+                      >
+                        0°
+                      </button>
+                      <button
+                        onClick={() => setFineAngle((prev) => Number(Math.min(180, prev + 0.1).toFixed(1)))}
+                        className="py-1 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 text-[10px] font-mono font-semibold transition cursor-pointer"
+                        title="0.1도 미세 시계 회전"
+                      >
+                        +0.1°
+                      </button>
+                      <button
+                        onClick={() => setFineAngle((prev) => Number(Math.min(180, prev + 1).toFixed(1)))}
+                        className="py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-mono font-semibold transition cursor-pointer"
+                        title="1도 시계 회전"
+                      >
+                        +1°
+                      </button>
+                      <button
+                        onClick={() => setFineAngle((prev) => Number(Math.min(180, prev + 5).toFixed(1)))}
+                        className="py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-mono font-semibold transition cursor-pointer"
+                        title="5도 시계 회전"
+                      >
+                        +5°
+                      </button>
+                    </div>
+
+                    {/* Direct Apply Button if fineAngle !== 0 */}
+                    {fineAngle !== 0 && (
+                      <button
+                        onClick={handleApplyFineRotate}
+                        className="w-full py-1.5 px-2 rounded-lg bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-bold text-xs shadow-md shadow-indigo-600/25 transition cursor-pointer flex items-center justify-center gap-1.5"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>회전 각도 적용 ({fineAngle > 0 ? '+' : ''}{fineAngle.toFixed(1)}°)</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* 3. 기준선 & 격자망 설정 (개별 동작) */}
+                  <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={showGuidelines}
+                          onChange={(e) => setShowGuidelines(e.target.checked)}
+                          className="accent-amber-500 rounded"
+                        />
+                        <span>기준선</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={showGridLines}
+                          onChange={(e) => setShowGridLines(e.target.checked)}
+                          className="accent-indigo-500 rounded"
+                        />
+                        <span>격자망</span>
+                      </label>
+                    </div>
+
+                    {showGuidelines && (
+                      <div className="flex justify-between items-center pt-1 border-t border-slate-800/80 text-[10px] text-slate-400">
+                        <span>기준선 중앙 정렬:</span>
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => setGuideLineYPct(50)}
+                            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 font-semibold"
+                          >
+                            가로선
+                          </button>
+                          <button
+                            onClick={() => setGuideLineXPct(50)}
+                            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 font-semibold"
+                          >
+                            세로선
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ---------------- Tool: 배경색 조정 (흰색 배경 투명화 및 배경색 교체) ---------------- */}
+              {activeTool === 'bgcolor' && (
+                <div className="space-y-3 text-xs">
+                  {/* 1. Quick Presets */}
+                  <div className="space-y-1.5">
+                    <span className="text-slate-400 text-[10px] font-semibold">원클릭 프리셋</span>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        onClick={() => {
+                          setBgColorTarget('#ffffff');
+                          setBgColorTolerance(18);
+                          setBgColorSmoothness(6);
+                          setBgColorContiguous(true);
+                          setBgColorReplaceMode('transparent');
+                        }}
+                        className="py-1.5 px-2 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 hover:text-white border border-indigo-500/40 font-bold text-[11px] transition text-left cursor-pointer truncate flex items-center gap-1.5"
+                        title="외곽 흰색 배경을 깨끗하게 투명화 (내부 보존)"
+                      >
+                        <Eraser className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                        <span>흰색 배경 투명화</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setBgColorTarget('#000000');
+                          setBgColorTolerance(18);
+                          setBgColorSmoothness(6);
+                          setBgColorContiguous(true);
+                          setBgColorReplaceMode('transparent');
+                        }}
+                        className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 font-medium text-[11px] transition text-left cursor-pointer truncate flex items-center gap-1.5"
+                        title="외곽 검은색 배경을 투명화"
+                      >
+                        <span className="w-3 h-3 rounded-full bg-black border border-slate-600 shrink-0" />
+                        <span>검은색 배경 투명화</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setBgColorTarget('#ffffff');
+                          setBgColorTolerance(25);
+                          setBgColorSmoothness(6);
+                          setBgColorContiguous(false);
+                          setBgColorReplaceMode('transparent');
+                        }}
+                        className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 font-medium text-[11px] transition text-left cursor-pointer truncate"
+                        title="이미지 내 모든 흰색을 투명화"
+                      >
+                        밝은 배경 전체 제거
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setBgColorTarget('#00ff00');
+                          setBgColorTolerance(35);
+                          setBgColorSmoothness(8);
+                          setBgColorContiguous(true);
+                          setBgColorReplaceMode('transparent');
+                        }}
+                        className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 hover:text-white border border-slate-700 font-medium text-[11px] transition text-left cursor-pointer truncate"
+                        title="녹색 크로마키 배경 투명화"
+                      >
+                        크로마키 (녹색)
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 2. 처리 방식 선택 (투명화 vs 다른 색 교체) */}
+                  <div className="space-y-1.5">
+                    <span className="text-slate-400 text-[10px] font-semibold">동작 모드</span>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        onClick={() => setBgColorReplaceMode('transparent')}
+                        className={`py-1.5 px-2 rounded-lg border text-xs font-semibold cursor-pointer transition flex items-center justify-center gap-1.5 ${
+                          bgColorReplaceMode === 'transparent'
+                            ? 'border-indigo-400 bg-indigo-600/30 text-white shadow'
+                            : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <Eraser className="w-3.5 h-3.5" />
+                        <span>투명 배경 (PNG)</span>
+                      </button>
+
+                      <button
+                        onClick={() => setBgColorReplaceMode('replace')}
+                        className={`py-1.5 px-2 rounded-lg border text-xs font-semibold cursor-pointer transition flex items-center justify-center gap-1.5 ${
+                          bgColorReplaceMode === 'replace'
+                            ? 'border-indigo-400 bg-indigo-600/30 text-white shadow'
+                            : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <span>배경색 변경</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 3. 제거할 대상 색상 (Target Color) */}
+                  <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-bold text-slate-300">제거할 대상 색상</span>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="color"
+                          value={bgColorTarget}
+                          onChange={(e) => setBgColorTarget(e.target.value)}
+                          className="w-6 h-6 rounded border border-slate-700 bg-slate-950 cursor-pointer"
+                        />
+                        <input
+                          type="text"
+                          value={bgColorTarget}
+                          onChange={(e) => setBgColorTarget(e.target.value)}
+                          className="w-16 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-center text-white font-mono text-xs focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Quick color chips */}
+                    <div className="flex items-center gap-1.5 pt-0.5">
+                      <span className="text-[10px] text-slate-500">빠른 선택:</span>
+                      {[
+                        { color: '#ffffff', label: '흰색' },
+                        { color: '#000000', label: '검정' },
+                        { color: '#f8fafc', label: '아이보리' },
+                        { color: '#e2e8f0', label: '연회색' },
+                        { color: '#00ff00', label: '크로마키' }
+                      ].map((chip) => (
+                        <button
+                          key={chip.color}
+                          onClick={() => setBgColorTarget(chip.color)}
+                          className={`w-5 h-5 rounded-md border transition cursor-pointer ${
+                            bgColorTarget.toLowerCase() === chip.color.toLowerCase()
+                              ? 'border-indigo-400 scale-110 shadow-sm shadow-indigo-500'
+                              : 'border-slate-700 hover:border-slate-500'
+                          }`}
+                          style={{ backgroundColor: chip.color }}
+                          title={chip.label}
+                        />
+                      ))}
+                    </div>
+
+                    {/* If replace mode, show new color picker */}
+                    {bgColorReplaceMode === 'replace' && (
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-[11px]">
+                        <span className="text-slate-300 font-medium">새로 채울 배경색:</span>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="color"
+                            value={bgColorNewColor}
+                            onChange={(e) => setBgColorNewColor(e.target.value)}
+                            className="w-6 h-6 rounded border border-slate-700 bg-slate-950 cursor-pointer"
+                          />
+                          <input
+                            type="text"
+                            value={bgColorNewColor}
+                            onChange={(e) => setBgColorNewColor(e.target.value)}
+                            className="w-16 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-center text-white font-mono text-xs focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 4. 적용 범위 (외곽 연결 배경 vs 전체) */}
+                  <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-1.5">
+                    <span className="text-[11px] font-bold text-slate-300">적용 범위</span>
+                    <div className="space-y-1 text-[11px]">
+                      <label className="flex items-start gap-2 text-slate-300 cursor-pointer select-none">
+                        <input
+                          type="radio"
+                          name="bgColorContiguous"
+                          checked={bgColorContiguous}
+                          onChange={() => setBgColorContiguous(true)}
+                          className="accent-indigo-500 mt-0.5"
+                        />
+                        <div>
+                          <span className="font-semibold text-white">외곽 연결 배경만 (권장)</span>
+                          <p className="text-[10px] text-slate-400">인물이나 물체 안쪽의 흰색(눈, 치아, 옷 등)을 안전하게 보존합니다</p>
+                        </div>
+                      </label>
+                      <label className="flex items-start gap-2 text-slate-300 cursor-pointer select-none pt-1 border-t border-slate-800/60">
+                        <input
+                          type="radio"
+                          name="bgColorContiguous"
+                          checked={!bgColorContiguous}
+                          onChange={() => setBgColorContiguous(false)}
+                          className="accent-indigo-500 mt-0.5"
+                        />
+                        <div>
+                          <span className="font-semibold text-white">전체 영역 동일 색상 제거</span>
+                          <p className="text-[10px] text-slate-400">이미지 전체에서 일치하는 모든 색상을 투명화합니다</p>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 5. 허용 오차 (Tolerance) */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[10px]">
+                      <span className="text-slate-400">허용 오차 (Tolerance)</span>
+                      <span className="font-mono text-indigo-400">{bgColorTolerance}%</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min="0"
+                        max="80"
+                        value={bgColorTolerance}
+                        onChange={(e) => setBgColorTolerance(parseInt(e.target.value, 10) || 0)}
+                        className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
+                      />
+                      <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5">
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          value={bgColorTolerance}
+                          onChange={(e) => setBgColorTolerance(Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)))}
+                          className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                        />
+                        <span className="text-[10px] text-slate-400">%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 6. 가장자리 부드럽게 (Smoothness / Feathering) */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[10px]">
+                      <span className="text-slate-400">가장자리 부드럽게 (Feather)</span>
+                      <span className="font-mono text-indigo-400">{bgColorSmoothness} px</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min="0"
+                        max="25"
+                        value={bgColorSmoothness}
+                        onChange={(e) => setBgColorSmoothness(parseInt(e.target.value, 10) || 0)}
+                        className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
+                      />
+                      <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5">
+                        <input
+                          type="number"
+                          min="0"
+                          max="30"
+                          value={bgColorSmoothness}
+                          onChange={(e) => setBgColorSmoothness(Math.max(0, Math.min(30, parseInt(e.target.value, 10) || 0)))}
+                          className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                        />
+                        <span className="text-[10px] text-slate-400">px</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 7. Action Buttons */}
+                  <div className="space-y-1.5 pt-1">
+                    <button
+                      onClick={handleApplyBgColor}
+                      className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-bold text-xs shadow-md shadow-indigo-600/25 transition cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>{bgColorReplaceMode === 'transparent' ? '배경 투명화 적용' : '배경색 변경 적용'}</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setBgColorTarget('#ffffff');
+                        setBgColorTolerance(18);
+                        setBgColorSmoothness(6);
+                        setBgColorContiguous(true);
+                        setBgColorReplaceMode('transparent');
+                      }}
+                      className="w-full py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs border border-slate-700 transition cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>설정 초기화</span>
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -1638,6 +2388,313 @@ export const ImageEditView: React.FC = () => {
                   </button>
                 </div>
               )}
+
+              {/* ---------------- Tool: 톤 커브 (Curves - 검은색은 진하게 흰색은 더 희게 등 포토샵 곡선) ---------------- */}
+              {activeTool === 'curves' && (() => {
+                const currentLut = generateToneCurveLUT(curveBlacks, curveShadows, curveMidtones, curveHighlights, curveWhites);
+                let pathD = `M 0 ${255 - currentLut[0]}`;
+                for (let x = 4; x <= 256; x += 4) {
+                  const sampleX = Math.min(255, x);
+                  pathD += ` L ${sampleX} ${255 - currentLut[sampleX]}`;
+                }
+                const areaD = `${pathD} L 255 255 L 0 255 Z`;
+
+                const points = [
+                  { x: 0, y: 255 - currentLut[0], label: '블랙' },
+                  { x: 64, y: 255 - currentLut[64], label: '암부' },
+                  { x: 128, y: 255 - currentLut[128], label: '중간' },
+                  { x: 192, y: 255 - currentLut[192], label: '명부' },
+                  { x: 255, y: 255 - currentLut[255], label: '화이트' },
+                ];
+
+                return (
+                  <div className="space-y-3 text-xs">
+                    {/* 1. Visual Curve Graph */}
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-bold text-slate-300">톤 커브 그래프</span>
+                        <span className="text-[10px] text-indigo-400 font-mono">Curves Graph</span>
+                      </div>
+
+                      <div className="relative w-full aspect-[4/3] max-h-36 bg-slate-900/90 rounded-lg overflow-hidden border border-slate-800/80">
+                        <svg viewBox="0 0 255 255" className="w-full h-full">
+                          {/* Quadrant Grid Lines */}
+                          <line x1="64" y1="0" x2="64" y2="255" stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
+                          <line x1="128" y1="0" x2="128" y2="255" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+                          <line x1="192" y1="0" x2="192" y2="255" stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
+                          <line x1="0" y1="64" x2="255" y2="64" stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
+                          <line x1="0" y1="128" x2="255" y2="128" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+                          <line x1="0" y1="192" x2="255" y2="192" stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
+
+                          {/* 1:1 Diagonal Neutral Slope */}
+                          <line x1="0" y1="255" x2="255" y2="0" stroke="rgba(148, 163, 184, 0.35)" strokeWidth="1.5" strokeDasharray="4 4" />
+
+                          {/* Shaded Area Under Curve */}
+                          <path d={areaD} fill="url(#curveAreaGradient)" opacity="0.25" />
+
+                          {/* The Tone Curve */}
+                          <path d={pathD} fill="none" stroke="#818cf8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+
+                          {/* Gradient definition */}
+                          <defs>
+                            <linearGradient id="curveAreaGradient" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#818cf8" />
+                              <stop offset="100%" stopColor="#4f46e5" stopOpacity="0" />
+                            </linearGradient>
+                          </defs>
+
+                          {/* Control points */}
+                          {points.map((pt, idx) => (
+                            <circle
+                              key={idx}
+                              cx={pt.x}
+                              cy={pt.y}
+                              r="4.5"
+                              className="fill-indigo-400 stroke-slate-950 stroke-2"
+                            />
+                          ))}
+                        </svg>
+
+                        {/* Graph labels */}
+                        <div className="absolute bottom-1 left-2 text-[9px] text-slate-500 font-mono">0 (Blacks)</div>
+                        <div className="absolute top-1 right-2 text-[9px] text-slate-500 font-mono">255 (Whites)</div>
+                      </div>
+                    </div>
+
+                    {/* 2. Quick Presets */}
+                    <div className="space-y-1.5">
+                      <span className="text-slate-400 text-[10px] font-semibold">톤 프리셋</span>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          onClick={() => {
+                            setCurveBlacks(-25);
+                            setCurveShadows(-15);
+                            setCurveMidtones(0);
+                            setCurveHighlights(15);
+                            setCurveWhites(275);
+                          }}
+                          className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white border border-slate-700 font-medium text-[11px] transition text-left cursor-pointer truncate"
+                          title="검은색은 더 진하게, 흰색은 더 희게 (S-Curve)"
+                        >
+                          S-Curve 대비강화
+                        </button>
+                        <button
+                          onClick={() => {
+                            setCurveBlacks(-45);
+                            setCurveShadows(-30);
+                            setCurveMidtones(0);
+                            setCurveHighlights(30);
+                            setCurveWhites(285);
+                          }}
+                          className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-purple-300 hover:text-white border border-slate-700 font-medium text-[11px] transition text-left cursor-pointer truncate"
+                          title="강한 명암비 대비"
+                        >
+                          강한 대비
+                        </button>
+                        <button
+                          onClick={() => {
+                            setCurveBlacks(-40);
+                            setCurveShadows(-25);
+                            setCurveMidtones(-10);
+                            setCurveHighlights(0);
+                            setCurveWhites(255);
+                          }}
+                          className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 font-medium text-[11px] transition text-left cursor-pointer truncate"
+                          title="검은색을 더 깊고 진하게"
+                        >
+                          검은색 진하게
+                        </button>
+                        <button
+                          onClick={() => {
+                            setCurveBlacks(0);
+                            setCurveShadows(0);
+                            setCurveMidtones(10);
+                            setCurveHighlights(25);
+                            setCurveWhites(285);
+                          }}
+                          className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 font-medium text-[11px] transition text-left cursor-pointer truncate"
+                          title="흰색 및 밝은 영역 강조"
+                        >
+                          흰색 더 희게
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 3. Detailed Curve Sliders */}
+                    <div className="space-y-2">
+                      {/* 블랙 */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px]">
+                          <span className="text-slate-400">블랙 (검은색 진하게)</span>
+                          <span className="font-mono text-indigo-400">{curveBlacks > 0 ? `+${curveBlacks}` : curveBlacks}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min="-100"
+                            max="100"
+                            value={curveBlacks}
+                            onChange={(e) => setCurveBlacks(parseInt(e.target.value, 10) || 0)}
+                            className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
+                          />
+                          <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5">
+                            <input
+                              type="number"
+                              min="-100"
+                              max="100"
+                              value={curveBlacks}
+                              onChange={(e) => setCurveBlacks(Math.max(-100, Math.min(100, parseInt(e.target.value, 10) || 0)))}
+                              className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 그림자 / 암부 */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px]">
+                          <span className="text-slate-400">그림자 (Shadows)</span>
+                          <span className="font-mono text-indigo-400">{curveShadows > 0 ? `+${curveShadows}` : curveShadows}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min="-100"
+                            max="100"
+                            value={curveShadows}
+                            onChange={(e) => setCurveShadows(parseInt(e.target.value, 10) || 0)}
+                            className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
+                          />
+                          <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5">
+                            <input
+                              type="number"
+                              min="-100"
+                              max="100"
+                              value={curveShadows}
+                              onChange={(e) => setCurveShadows(Math.max(-100, Math.min(100, parseInt(e.target.value, 10) || 0)))}
+                              className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 중간 톤 */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px]">
+                          <span className="text-slate-400">중간 톤 (Midtones)</span>
+                          <span className="font-mono text-indigo-400">{curveMidtones > 0 ? `+${curveMidtones}` : curveMidtones}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min="-100"
+                            max="100"
+                            value={curveMidtones}
+                            onChange={(e) => setCurveMidtones(parseInt(e.target.value, 10) || 0)}
+                            className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
+                          />
+                          <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5">
+                            <input
+                              type="number"
+                              min="-100"
+                              max="100"
+                              value={curveMidtones}
+                              onChange={(e) => setCurveMidtones(Math.max(-100, Math.min(100, parseInt(e.target.value, 10) || 0)))}
+                              className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 하이라이트 / 명부 */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px]">
+                          <span className="text-slate-400">하이라이트 (Highlights)</span>
+                          <span className="font-mono text-indigo-400">{curveHighlights > 0 ? `+${curveHighlights}` : curveHighlights}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min="-100"
+                            max="100"
+                            value={curveHighlights}
+                            onChange={(e) => setCurveHighlights(parseInt(e.target.value, 10) || 0)}
+                            className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
+                          />
+                          <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5">
+                            <input
+                              type="number"
+                              min="-100"
+                              max="100"
+                              value={curveHighlights}
+                              onChange={(e) => setCurveHighlights(Math.max(-100, Math.min(100, parseInt(e.target.value, 10) || 0)))}
+                              className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 화이트 */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px]">
+                          <span className="text-slate-400">화이트 (흰색 더 희게)</span>
+                          <span className="font-mono text-indigo-400">{curveWhites !== 255 ? (curveWhites > 255 ? `+${curveWhites - 255}` : `${curveWhites - 255}`) : '0'}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min="155"
+                            max="355"
+                            value={curveWhites}
+                            onChange={(e) => setCurveWhites(parseInt(e.target.value, 10) || 255)}
+                            className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
+                          />
+                          <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5">
+                            <input
+                              type="number"
+                              min="-100"
+                              max="100"
+                              value={curveWhites - 255}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value, 10) || 0;
+                                setCurveWhites(255 + Math.max(-100, Math.min(100, val)));
+                              }}
+                              className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="space-y-1.5 pt-1">
+                      {isCurveModified && (
+                        <button
+                          onClick={handleApplyCurves}
+                          className="w-full py-1.5 px-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-bold text-xs shadow-md shadow-indigo-600/25 transition cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>커브 적용</span>
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => {
+                          setCurveBlacks(0);
+                          setCurveShadows(0);
+                          setCurveMidtones(0);
+                          setCurveHighlights(0);
+                          setCurveWhites(255);
+                        }}
+                        className="w-full py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs border border-slate-700 transition cursor-pointer flex items-center justify-center gap-1.5"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>커브 초기화</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* ---------------- Tool 6: 선명도 (게이지 미리보기 + 수치 입력) ---------------- */}
               {activeTool === 'sharpen' && (
@@ -2041,8 +3098,11 @@ export const ImageEditView: React.FC = () => {
               )}
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
+    </div>
+  </div>
+)}
 
       {/* ========================================================================= */}
       {/* 4. MODAL: 이미지 저장                                                     */}

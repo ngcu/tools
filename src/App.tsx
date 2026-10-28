@@ -197,7 +197,7 @@ export default function App() {
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 min-h-0 overflow-y-auto w-full px-2.5 sm:px-6 lg:px-8 py-2.5 sm:py-3.5 pb-20 md:pb-3">
+      <main className="flex-1 min-h-0 overflow-y-auto w-full px-1 sm:px-2.5 py-1 pb-14 md:pb-1">
         {/* 1. Image Edit View */}
         <div className={activeTab === 'edit' ? 'block' : 'hidden'}>
           <ImageEditView />
