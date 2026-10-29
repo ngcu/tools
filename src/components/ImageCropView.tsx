@@ -487,7 +487,7 @@ export const ImageCropView: React.FC = () => {
                   </div>
 
                   {/* Dimension Tooltip Badge */}
-                  <div className="absolute -top-7 left-1/2 -translate-x-1/2 px-2.5 py-0.5 rounded-md bg-slate-950/90 text-[10px] font-mono text-indigo-200 border border-indigo-500/30 whitespace-nowrap pointer-events-none shadow-md z-30 flex items-center gap-1.5">
+                  <div className="absolute -top-7 left-1/2 -translate-x-1/2 px-2.5 py-0.5 rounded-md bg-slate-950/90 text-xs font-mono text-indigo-200 border border-indigo-500/30 whitespace-nowrap pointer-events-none shadow-md z-30 flex items-center gap-1.5">
                     <span>{cropRect.width} × {cropRect.height} px</span>
                     {reductionPct > 0 && (
                       <span className="text-emerald-400 font-semibold">(-{reductionPct}%)</span>
@@ -543,7 +543,7 @@ export const ImageCropView: React.FC = () => {
 
             {/* Quick Actions Under Viewport */}
             <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-slate-900/80 border border-slate-800 text-xs">
-              <div className="flex items-center gap-2 text-slate-400 font-mono text-[11px]">
+              <div className="flex items-center gap-2 text-slate-300 font-mono text-sm">
                 <span>원본: {imgNaturalSize.width} × {imgNaturalSize.height} px</span>
                 <span>•</span>
                 <span>크롭: <strong className="text-white">{cropRect.width} × {cropRect.height} px</strong></span>
@@ -593,7 +593,7 @@ export const ImageCropView: React.FC = () => {
 
               {/* Background Color info & Sensitivity Slider */}
               <div className="space-y-2 text-xs">
-                <div className="flex items-center justify-between text-slate-300 text-[11px]">
+                <div className="flex items-center justify-between text-slate-200 text-sm">
                   <span className="text-slate-400">감지된 외곽 여백 색상:</span>
                   <div className="flex items-center gap-1.5 font-mono">
                     {autoCropResult?.detectedBg.isTransparent ? (
@@ -613,9 +613,9 @@ export const ImageCropView: React.FC = () => {
                 </div>
 
                 <div className="space-y-1.5 pt-1">
-                  <div className="flex justify-between text-[11px]">
+                  <div className="flex justify-between text-sm">
                     <span className="text-slate-400 font-medium">여백 감지 감도 (오차 허용치)</span>
-                    <span className="text-indigo-400 font-mono font-bold">{tolerance}%</span>
+                    <span className="text-indigo-400 font-mono font-bold text-sm">{tolerance}%</span>
                   </div>
                   <input
                     type="range"
@@ -629,14 +629,14 @@ export const ImageCropView: React.FC = () => {
                     }}
                     className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                   />
-                  <p className="text-[10px] text-slate-400">
+                  <p className="text-xs text-slate-400">
                     * 그라디언트나 노이즈가 있는 여백은 감도를 높이면 더 깔끔하게 잘립니다.
                   </p>
                 </div>
 
                 {/* Trimmed pixel breakdown */}
                 {autoCropResult && (
-                  <div className="grid grid-cols-4 gap-1 pt-1 text-center font-mono text-[10px]">
+                  <div className="grid grid-cols-4 gap-1 pt-1 text-center font-mono text-xs">
                     <div className="p-1.5 rounded-lg bg-slate-950/70 border border-slate-800">
                       <span className="text-slate-400 block">상단</span>
                       <strong className="text-white">-{autoCropResult.trimmedPixels.top}px</strong>
@@ -669,10 +669,10 @@ export const ImageCropView: React.FC = () => {
 
               {/* Aspect Ratio Presets */}
               <div className="space-y-1.5">
-                <label className="text-[11px] font-semibold text-slate-400 block">
+                <label className="text-xs font-semibold text-slate-300 block">
                   크롭 비율 제한
                 </label>
-                <div className="grid grid-cols-5 gap-1 text-[11px]">
+                <div className="grid grid-cols-5 gap-1 text-xs">
                   {[
                     { mode: 'free', label: '자유' },
                     { mode: '1:1', label: '1:1' },
@@ -698,7 +698,7 @@ export const ImageCropView: React.FC = () => {
               {/* Fine tuning pixel inputs */}
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="space-y-1">
-                  <span className="text-slate-400 text-[10px]">시작 X (가로)</span>
+                  <span className="text-slate-300 text-xs font-medium">시작 X (가로)</span>
                   <input
                     type="number"
                     min="0"
@@ -716,7 +716,7 @@ export const ImageCropView: React.FC = () => {
                   />
                 </div>
                 <div className="space-y-1">
-                  <span className="text-slate-400 text-[10px]">시작 Y (세로)</span>
+                  <span className="text-slate-300 text-xs font-medium">시작 Y (세로)</span>
                   <input
                     type="number"
                     min="0"

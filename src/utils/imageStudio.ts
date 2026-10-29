@@ -209,6 +209,65 @@ export function applySharpen(canvas: HTMLCanvasElement, amount: number): HTMLCan
 /**
  * Applies mosaic pixelation or box blur to a specific rectangular sub-region
  */
+/**
+ * Natural text/stroke thickening filter (morphological dark stroke dilation)
+ * Enhances thin text or faint strokes naturally without excessive blur.
+ */
+export function applyTextStrokeThicken(canvas: HTMLCanvasElement, strength: number): HTMLCanvasElement {
+  if (strength <= 0) return canvas;
+
+  const resCanvas = document.createElement('canvas');
+  resCanvas.width = canvas.width;
+  resCanvas.height = canvas.height;
+  const ctx = resCanvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return canvas;
+
+  ctx.drawImage(canvas, 0, 0);
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imgData.data;
+  const w = canvas.width;
+  const h = canvas.height;
+  const copy = new Uint8ClampedArray(data);
+
+  const radius = Math.min(2, Math.max(1, Math.round(strength)));
+  const blendFactor = Math.min(0.9, 0.45 + strength * 0.2);
+
+  for (let y = radius; y < h - radius; y++) {
+    for (let x = radius; x < w - radius; x++) {
+      const centerIdx = (y * w + x) * 4;
+      const centerLum = 0.299 * copy[centerIdx] + 0.587 * copy[centerIdx + 1] + 0.114 * copy[centerIdx + 2];
+
+      let minLum = centerLum;
+      let minR = copy[centerIdx];
+      let minG = copy[centerIdx + 1];
+      let minB = copy[centerIdx + 2];
+
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nIdx = ((y + dy) * w + (x + dx)) * 4;
+          const lum = 0.299 * copy[nIdx] + 0.587 * copy[nIdx + 1] + 0.114 * copy[nIdx + 2];
+          if (lum < minLum) {
+            minLum = lum;
+            minR = copy[nIdx];
+            minG = copy[nIdx + 1];
+            minB = copy[nIdx + 2];
+          }
+        }
+      }
+
+      if (minLum < 200 && (centerLum - minLum) > 18) {
+        data[centerIdx] = Math.round(copy[centerIdx] * (1 - blendFactor) + minR * blendFactor);
+        data[centerIdx + 1] = Math.round(copy[centerIdx + 1] * (1 - blendFactor) + minG * blendFactor);
+        data[centerIdx + 2] = Math.round(copy[centerIdx + 2] * (1 - blendFactor) + minB * blendFactor);
+      }
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  return resCanvas;
+}
+
 export function applyRegionMosaic(
   canvas: HTMLCanvasElement,
   options: MosaicOptions
@@ -472,10 +531,12 @@ export function applyTextWatermark(
     if (opts.borderWidth && opts.borderWidth > 0) {
       ctx.lineWidth = opts.borderWidth;
       ctx.strokeStyle = opts.borderColor || '#ffffff';
-      if (opts.borderStyle === 'dashed') {
-        ctx.setLineDash([opts.borderWidth * 3, opts.borderWidth * 2]);
-      } else if (opts.borderStyle === 'dotted') {
-        ctx.setLineDash([opts.borderWidth, opts.borderWidth * 1.5]);
+      if (opts.borderStyle === 'dotted') {
+        ctx.lineCap = 'round';
+        ctx.setLineDash([1, Math.max(4, opts.borderWidth * 2.2)]);
+      } else if (opts.borderStyle === 'dashed') {
+        ctx.lineCap = 'butt';
+        ctx.setLineDash([Math.max(6, opts.borderWidth * 3), Math.max(4, opts.borderWidth * 2)]);
       } else {
         ctx.setLineDash([]);
       }
@@ -596,11 +657,11 @@ export function generateToneCurveLUT(
 ): Uint8Array {
   const lut = new Uint8Array(256);
 
-  const p0 = { x: 0, y: Math.max(0, Math.min(255, blackPoint)) };
-  const p1 = { x: 64, y: Math.max(0, Math.min(255, 64 + (shadows * 0.6))) };
-  const p2 = { x: 128, y: Math.max(0, Math.min(255, 128 + (midtones * 0.6))) };
-  const p3 = { x: 192, y: Math.max(0, Math.min(255, 192 + (highlights * 0.6))) };
-  const p4 = { x: 255, y: Math.max(0, Math.min(255, whitePoint)) };
+  const p0 = { x: 0, y: blackPoint * 0.8 };
+  const p1 = { x: 64, y: 64 + (shadows * 0.8) };
+  const p2 = { x: 128, y: 128 + (midtones * 0.8) };
+  const p3 = { x: 192, y: 192 + (highlights * 0.8) };
+  const p4 = { x: 255, y: 255 + ((whitePoint - 255) * 0.8) };
 
   const points = [p0, p1, p2, p3, p4];
 

@@ -27,7 +27,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Activity,
-  Eraser
+  Eraser,
+  Pipette,
+  Plus
 } from 'lucide-react';
 import {
   CropRect,
@@ -43,6 +45,7 @@ import {
   cloneCanvas,
   generateToneCurveLUT,
   applyToneCurves,
+  applyTextStrokeThicken,
   applyBackgroundColorAdjustment
 } from '../utils/imageStudio';
 import { copyImageBlobToClipboard } from '../utils/imageCropper';
@@ -63,8 +66,9 @@ type ActiveTool =
 
 const SYSTEM_FONTS = [
   {
-    category: '고딕체 (Sans-serif)',
+    category: '고딕계열 (Sans-serif)',
     fonts: [
+      { name: 'Noto Sans KR (구글 본고딕)', value: '"Noto Sans KR", "Malgun Gothic", sans-serif' },
       { name: '맑은 고딕 (기본)', value: '"Malgun Gothic", "맑은 고딕", sans-serif' },
       { name: 'Pretendard / 시스템', value: 'system-ui, -apple-system, sans-serif' },
       { name: 'Apple SD 산돌고딕 Neo', value: '"Apple SD Gothic Neo", "Apple SD 산돌고딕 Neo", sans-serif' },
@@ -74,7 +78,7 @@ const SYSTEM_FONTS = [
     ]
   },
   {
-    category: '명조체 (Serif)',
+    category: '명조계열 (Serif)',
     fonts: [
       { name: '바탕체 (Windows)', value: '"Batang", "바탕체", serif' },
       { name: '애플명조 (macOS/iOS)', value: '"Apple Myungjo", "애플명조", serif' },
@@ -90,6 +94,23 @@ const SYSTEM_FONTS = [
     ]
   }
 ];
+
+export interface TextItem {
+  id: string;
+  text: string;
+  x: number; // natural canvas px
+  y: number; // natural canvas px
+  fontSize: number;
+  fontFamily: string;
+  color: string;
+  opacity: number;
+  hasBackground: boolean;
+  backgroundColor: string;
+  backgroundRadius: number;
+  borderWidth: number;
+  borderColor: string;
+  borderStyle: 'solid' | 'dashed' | 'dotted';
+}
 
 export const ImageEditView: React.FC = () => {
   // Source Image & History
@@ -131,8 +152,8 @@ export const ImageEditView: React.FC = () => {
 
   // Tool 4: 회전 / 반전 (Rotate & Fine Angle & Guide Lines)
   const [fineAngle, setFineAngle] = useState<number>(0);
-  const [showGuidelines, setShowGuidelines] = useState<boolean>(true);
-  const [showGridLines, setShowGridLines] = useState<boolean>(true);
+  const [showGuidelines, setShowGuidelines] = useState<boolean>(false);
+  const [showGridLines, setShowGridLines] = useState<boolean>(false);
   const [guideLineYPct, setGuideLineYPct] = useState<number>(50); // horizontal
   const [guideLineXPct, setGuideLineXPct] = useState<number>(50); // vertical
   const isDraggingGuideLineY = useRef<boolean>(false);
@@ -168,20 +189,31 @@ export const ImageEditView: React.FC = () => {
   const [isSelectingMosaic, setIsSelectingMosaic] = useState<boolean>(false);
   const mosaicStartPos = useRef<{ x: number; y: number } | null>(null);
 
-  // Tool 8: 텍스트 (Text)
+  
+  // Tool 8: 텍스트 (Text Items Layer)
+  const [textItems, setTextItems] = useState<TextItem[]>([]);
+  const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
+
+  // Active/selected text item fields for current edit
   const [textString, setTextString] = useState<string>('텍스트 입력');
   const [textSize, setTextSize] = useState<number>(36);
   const [textColor, setTextColor] = useState<string>('#ffffff');
-  const [textOpacity, setTextOpacity] = useState<number>(0.95);
-  const [textFont, setTextFont] = useState<string>('"Malgun Gothic", "맑은 고딕", sans-serif');
+  const [textOpacity, setTextOpacity] = useState<number>(1.0); // 기본 투명도 100%
+  const [textFont, setTextFont] = useState<string>('"Noto Sans KR", "Malgun Gothic", sans-serif');
   const [textPos, setTextPos] = useState<{ x: number; y: number }>({ x: 40, y: 80 });
   const [hasTextBg, setHasTextBg] = useState<boolean>(false);
   const [textBgColor, setTextBgColor] = useState<string>('#000000');
   const [textBorderRadius, setTextBorderRadius] = useState<number>(8);
   const [textBorderWidth, setTextBorderWidth] = useState<number>(0);
   const [textBorderColor, setTextBorderColor] = useState<string>('#ffffff');
+  const [textBorderStyle, setTextBorderStyle] = useState<'solid' | 'dashed' | 'dotted'>('solid');
+
   const [isDraggingText, setIsDraggingText] = useState<boolean>(false);
+  const draggingTextIdRef = useRef<string | null>(null);
   const textDragStart = useRef<{ clientX: number; clientY: number; initialPos: { x: number; y: number } } | null>(null);
+
+  // Tool: 선명도 & 텍스트 굵게 & 블러
+  const [textThickenStrength, setTextThickenStrength] = useState<number>(0);
 
   // Tool 9: 외곽효과 (Border & Radius)
   const [borderRadius, setBorderRadius] = useState<number>(0);
@@ -221,6 +253,22 @@ export const ImageEditView: React.FC = () => {
     isTransitioning: false
   });
 
+  const pickColorFromEyeDropper = async (callback: (hex: string) => void) => {
+    if ((window as any).EyeDropper) {
+      try {
+        const eyeDropper = new (window as any).EyeDropper();
+        const res = await eyeDropper.open();
+        if (res && res.sRGBHex) {
+          callback(res.sRGBHex);
+        }
+      } catch {
+        // cancelled
+      }
+    } else {
+      alert('현재 브라우저에서는 화면 스포이트 기능이 지원되지 않습니다.');
+    }
+  };
+
   // Push state to history
   const pushHistory = (canvas: HTMLCanvasElement) => {
     setHistory((prev) => [...prev.slice(-25), cloneCanvas(canvas)]);
@@ -252,6 +300,9 @@ export const ImageEditView: React.FC = () => {
         setCanvasTargetW(img.naturalWidth);
         setCanvasTargetH(img.naturalHeight);
         setCropRect({ x: 0, y: 0, width: img.naturalWidth, height: img.naturalHeight });
+        const initFit = calculateFitScale(img.naturalWidth, img.naturalHeight);
+        setZoomLevel(initFit);
+        setPanOffset({ x: 0, y: 0 });
         setTextPos({
           x: Math.round(img.naturalWidth * 0.1),
           y: Math.round(img.naturalHeight * 0.8)
@@ -526,10 +577,6 @@ export const ImageEditView: React.FC = () => {
         setCurrentCanvas(processed);
         setMosaicSelection(null);
       }
-    } else if (activeTool === 'text') {
-      if (textString.trim()) {
-        handleBakeText();
-      }
     } else if (activeTool === 'border') {
       if (borderRadius > 0 || borderWidth > 0) {
         pushHistory(currentCanvas);
@@ -548,7 +595,9 @@ export const ImageEditView: React.FC = () => {
   // Tool Switching: Automatically commits current tool's pending changes!
   const handleSelectTool = (newTool: ActiveTool) => {
     if (newTool === activeTool) return;
-    handleApplyCurrentTool();
+    if (activeTool !== 'text') {
+      handleApplyCurrentTool();
+    }
     setActiveTool(newTool);
   };
 
@@ -714,7 +763,7 @@ export const ImageEditView: React.FC = () => {
   };
 
   const getAnchorArrowSymbol = (r: number, c: number) => {
-    if (r === canvasAnchor.row && c === canvasAnchor.col) return '●';
+    if (r === canvasAnchor.row && c === canvasAnchor.col) return '';
     const dr = r - canvasAnchor.row;
     const dc = c - canvasAnchor.col;
     const isShrink = currentCanvas
@@ -732,7 +781,7 @@ export const ImageEditView: React.FC = () => {
     if (effDr === 1 && effDc === -1) return '↙';
     if (effDr === 1 && effDc === 0) return '↓';
     if (effDr === 1 && effDc === 1) return '↘';
-    return '•';
+    return '';
   };
 
   // -------------------------------------------------------------
@@ -881,11 +930,34 @@ export const ImageEditView: React.FC = () => {
     setCurveWhites(255);
   };
 
+    // Calculate scale for fitting canvas inside viewport with padding
+  const calculateFitScale = useCallback((canvasW: number, canvasH: number): number => {
+    if (!viewportContainerRef.current || canvasW <= 0 || canvasH <= 0) return 1.0;
+    const vpRect = viewportContainerRef.current.getBoundingClientRect();
+    const availW = Math.max(100, vpRect.width - 64);
+    const availH = Math.max(100, vpRect.height - 64);
+    const scaleW = availW / canvasW;
+    const scaleH = availH / canvasH;
+    return Number(Math.min(scaleW, scaleH, 1.0).toFixed(2));
+  }, []);
+
+  const handleFitToScreen = useCallback(() => {
+    if (!currentCanvas) return;
+    const fitScale = calculateFitScale(currentCanvas.width, currentCanvas.height);
+    setZoomLevel(fitScale);
+    setPanOffset({ x: 0, y: 0 });
+  }, [currentCanvas, calculateFitScale]);
+
+  const handleResetTo100 = useCallback(() => {
+    setZoomLevel(1.0); // 100% 1:1 original pixel actual size
+    setPanOffset({ x: 0, y: 0 });
+  }, []);
+
   // Zoom & Pan Handlers
   const handleWheelZoom = (e: React.WheelEvent) => {
     e.preventDefault();
-    const delta = e.deltaY < 0 ? 0.15 : -0.15;
-    setZoomLevel((prev) => Math.max(0.25, Math.min(5.0, Number((prev + delta).toFixed(2)))));
+    const delta = e.deltaY < 0 ? 0.08 : -0.08;
+    setZoomLevel((prev) => Math.max(0.1, Math.min(5.0, Number((prev + delta).toFixed(2)))));
   };
 
   const handleViewportBgPointerDown = (e: React.PointerEvent) => {
@@ -975,63 +1047,138 @@ export const ImageEditView: React.FC = () => {
   };
 
   // -------------------------------------------------------------
-  // Tool 8: 텍스트 Drag Handlers & Bake
+  // Tool 8: 텍스트 (Object-based Text Items Layer Handlers)
   // -------------------------------------------------------------
-  const handleTextOverlayPointerDown = (e: React.PointerEvent) => {
+  const bakeAllTextItemsToCanvas = (sourceCanvas: HTMLCanvasElement): HTMLCanvasElement => {
+    if (textItems.length === 0) return sourceCanvas;
+    let res = cloneCanvas(sourceCanvas);
+    for (const item of textItems) {
+      res = applyTextWatermark(res, {
+        text: item.text,
+        fontSize: item.fontSize,
+        fontFamily: item.fontFamily,
+        color: item.color,
+        opacity: item.opacity,
+        position: 'custom',
+        customX: item.x,
+        customY: item.y,
+        hasBackground: item.hasBackground,
+        backgroundColor: item.backgroundColor,
+        backgroundRadius: item.backgroundRadius,
+        borderWidth: item.borderWidth,
+        borderColor: item.borderColor,
+        borderStyle: item.borderStyle
+      });
+    }
+    return res;
+  };
+
+  const handleAddTextItem = () => {
+    if (!currentCanvas) return;
+    const newId = 'txt_' + Date.now();
+    const defaultFontSize = Math.max(18, Math.min(72, Math.round(currentCanvas.width / 20)));
+    const newItem: TextItem = {
+      id: newId,
+      text: textString.trim() || '텍스트 입력',
+      x: Math.round(currentCanvas.width / 2 - 80),
+      y: Math.round(currentCanvas.height / 2),
+      fontSize: defaultFontSize,
+      fontFamily: textFont,
+      color: textColor,
+      opacity: textOpacity,
+      hasBackground: hasTextBg,
+      backgroundColor: textBgColor,
+      backgroundRadius: textBorderRadius,
+      borderWidth: textBorderWidth,
+      borderColor: textBorderColor,
+      borderStyle: textBorderStyle
+    };
+    setTextItems((prev) => [...prev, newItem]);
+    setSelectedTextId(newId);
+  };
+
+  const updateSelectedTextProperty = (updates: Partial<TextItem>) => {
+    if (!selectedTextId) return;
+    setTextItems((prev) =>
+      prev.map((item) => (item.id === selectedTextId ? { ...item, ...updates } : item))
+    );
+  };
+
+  const handleSelectTextItem = (id: string) => {
+    setSelectedTextId(id);
+    const item = textItems.find((t) => t.id === id);
+    if (item) {
+      setTextString(item.text);
+      setTextSize(item.fontSize);
+      setTextFont(item.fontFamily);
+      setTextColor(item.color);
+      setTextOpacity(item.opacity);
+      setHasTextBg(item.hasBackground);
+      setTextBgColor(item.backgroundColor);
+      setTextBorderRadius(item.backgroundRadius);
+      setTextBorderWidth(item.borderWidth);
+      setTextBorderColor(item.borderColor);
+      setTextBorderStyle(item.borderStyle);
+    }
+  };
+
+  const handleDeleteSelectedText = () => {
+    if (!selectedTextId) return;
+    setTextItems((prev) => prev.filter((t) => t.id !== selectedTextId));
+    setSelectedTextId(null);
+  };
+
+  const handleTextOverlayPointerDown = (e: React.PointerEvent, id: string) => {
     e.stopPropagation();
     e.preventDefault();
+    handleSelectTextItem(id);
     setIsDraggingText(true);
-    textDragStart.current = {
-      clientX: e.clientX,
-      clientY: e.clientY,
-      initialPos: { ...textPos }
-    };
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    draggingTextIdRef.current = id;
+    const item = textItems.find((t) => t.id === id);
+    if (item) {
+      textDragStart.current = {
+        clientX: e.clientX,
+        clientY: e.clientY,
+        initialPos: { x: item.x, y: item.y }
+      };
+    }
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
   };
 
   const handleTextOverlayPointerMove = (e: React.PointerEvent) => {
-    if (!isDraggingText || !textDragStart.current || !currentCanvas || !displayCanvasRef.current) return;
+    if (!isDraggingText || !textDragStart.current || !draggingTextIdRef.current || !currentCanvas || !displayCanvasRef.current) return;
     const rect = displayCanvasRef.current.getBoundingClientRect();
     const scaleX = currentCanvas.width / Math.max(1, rect.width);
     const scaleY = currentCanvas.height / Math.max(1, rect.height);
     const dx = (e.clientX - textDragStart.current.clientX) * scaleX;
     const dy = (e.clientY - textDragStart.current.clientY) * scaleY;
 
-    setTextPos({
-      x: Math.round(Math.max(10, Math.min(currentCanvas.width - 20, textDragStart.current.initialPos.x + dx))),
-      y: Math.round(Math.max(20, Math.min(currentCanvas.height - 10, textDragStart.current.initialPos.y + dy)))
-    });
+    const newX = Math.round(textDragStart.current.initialPos.x + dx);
+    const newY = Math.round(textDragStart.current.initialPos.y + dy);
+
+    setTextItems((prev) =>
+      prev.map((item) => (item.id === draggingTextIdRef.current ? { ...item, x: newX, y: newY } : item))
+    );
   };
 
   const handleTextOverlayPointerUp = (e: React.PointerEvent) => {
     if (isDraggingText) {
       setIsDraggingText(false);
+      draggingTextIdRef.current = null;
       textDragStart.current = null;
       try {
-        (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+        (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
       } catch {}
     }
   };
 
   const handleBakeText = () => {
-    if (!currentCanvas || !textString.trim()) return;
+    if (!currentCanvas || textItems.length === 0) return;
     pushHistory(currentCanvas);
-    const watermarked = applyTextWatermark(currentCanvas, {
-      text: textString,
-      fontSize: textSize,
-      fontFamily: textFont,
-      color: textColor,
-      opacity: textOpacity,
-      position: 'custom',
-      customX: textPos.x,
-      customY: textPos.y,
-      hasBackground: hasTextBg,
-      backgroundColor: textBgColor,
-      backgroundRadius: textBorderRadius,
-      borderWidth: textBorderWidth,
-      borderColor: textBorderColor
-    });
-    setCurrentCanvas(watermarked);
+    const baked = bakeAllTextItemsToCanvas(currentCanvas);
+    setCurrentCanvas(baked);
+    setTextItems([]);
+    setSelectedTextId(null);
   };
 
   // -------------------------------------------------------------
@@ -1042,7 +1189,8 @@ export const ImageEditView: React.FC = () => {
     try {
       setIsProcessing(true);
       const mime = exportFormat === 'jpeg' ? 'image/jpeg' : exportFormat === 'webp' ? 'image/webp' : 'image/png';
-      const dataUrl = currentCanvas.toDataURL(mime, exportQuality);
+      const finalCanvas = bakeAllTextItemsToCanvas(currentCanvas);
+      const dataUrl = finalCanvas.toDataURL(mime, exportQuality);
       const a = document.createElement('a');
       const cleanName = saveFileName.trim() || 'edited_image';
       a.download = `${cleanName}.${exportFormat}`;
@@ -1096,8 +1244,7 @@ export const ImageEditView: React.FC = () => {
     { id: 'bgcolor', label: '배경색 조정', icon: Eraser },
     { id: 'color', label: '색상 보정', icon: Sliders },
     { id: 'curves', label: '톤 커브', icon: Activity },
-    { id: 'sharpen', label: '선명도', icon: Sparkles },
-    { id: 'mosaic', label: '타일링 / 블러', icon: Grid },
+    { id: 'sharpen', label: '선명도 / 블러', icon: Sparkles },
     { id: 'text', label: '텍스트', icon: Type },
     { id: 'border', label: '외곽효과', icon: Square },
   ] as const;
@@ -1296,9 +1443,11 @@ export const ImageEditView: React.FC = () => {
 
             {/* Main Canvas Container with Smooth Animated Transform and Zoom/Pan */}
             <div
-              className="relative inline-block max-w-full max-h-full will-change-transform"
+              className="relative inline-block will-change-transform select-none shrink-0"
               style={{
-                transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomLevel}) rotate(${fineAngle + animTransform.rotate}deg) scale(${animTransform.scaleX}, ${animTransform.scaleY})`,
+                transform: `translate(${panOffset.x}px, ${panOffset.y}px) rotate(${fineAngle + animTransform.rotate}deg) scale(${animTransform.scaleX}, ${animTransform.scaleY})`,
+                width: `${Math.round((currentCanvas?.width || 1) * zoomLevel)}px`,
+                height: `${Math.round((currentCanvas?.height || 1) * zoomLevel)}px`,
                 transition: animTransform.isTransitioning
                   ? 'transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1)'
                   : 'none',
@@ -1307,7 +1456,11 @@ export const ImageEditView: React.FC = () => {
             >
               <canvas
                 ref={displayCanvasRef}
-                className="block max-w-full max-h-[calc(100vh-140px)] object-contain rounded shadow"
+                style={{
+                  width: `${Math.round((currentCanvas?.width || 1) * zoomLevel)}px`,
+                  height: `${Math.round((currentCanvas?.height || 1) * zoomLevel)}px`
+                }}
+                className="block object-contain rounded shadow"
               />
 
               {/* Crop Overlay & 8 Handles */}
@@ -1330,7 +1483,7 @@ export const ImageEditView: React.FC = () => {
                       height: `${cropHeightPct}%`
                     }}
                   >
-                    <div className="absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded bg-slate-950/95 text-[10px] font-mono text-indigo-300 border border-indigo-500/40 whitespace-nowrap shadow pointer-events-none">
+                    <div className="absolute -top-7 left-1/2 -translate-x-1/2 px-2.5 py-0.5 rounded bg-slate-950/95 text-xs font-mono font-semibold text-indigo-300 border border-indigo-500/40 whitespace-nowrap shadow pointer-events-none">
                       {cropRect.width} × {cropRect.height} px
                     </div>
 
@@ -1347,39 +1500,60 @@ export const ImageEditView: React.FC = () => {
                 </>
               )}
 
-              {/* Clean Draggable Text Box without banners */}
-              {activeTool === 'text' && (
-                <div
-                  onPointerDown={handleTextOverlayPointerDown}
-                  onPointerMove={handleTextOverlayPointerMove}
-                  onPointerUp={handleTextOverlayPointerUp}
-                  className="absolute z-20 cursor-move border border-dashed border-indigo-400 select-none shadow-2xl"
-                  style={{
-                    left: `${textLeftPct}%`,
-                    top: `${textTopPct}%`,
-                    transform: 'translate(-10px, -24px)',
-                    backgroundColor: hasTextBg ? textBgColor : 'rgba(15, 23, 42, 0.4)',
-                    borderRadius: hasTextBg ? `${textBorderRadius}px` : '4px',
-                    borderWidth: hasTextBg && textBorderWidth > 0 ? `${textBorderWidth}px` : undefined,
-                    borderColor: hasTextBg && textBorderWidth > 0 ? textBorderColor : undefined,
-                    padding: '6px 12px'
-                  }}
-                >
+              {/* Object-based Multi-Text Items Layer */}
+              {textItems.map((item) => {
+                const isSelected = selectedTextId === item.id;
+                const leftPx = item.x * zoomLevel;
+                const topPx = item.y * zoomLevel;
+                const scaledFontSize = Math.max(8, item.fontSize * zoomLevel);
+                const scaledBorderWidth = item.borderWidth > 0 ? Math.max(1, Math.round(item.borderWidth * zoomLevel)) : 0;
+                const scaledRadius = Math.round(item.backgroundRadius * zoomLevel);
+                const scaledPadX = Math.max(4, Math.round(8 * zoomLevel));
+                const scaledPadY = Math.max(2, Math.round(4 * zoomLevel));
+
+                return (
                   <div
-                    style={{
-                      fontFamily: textFont,
-                      fontSize: `${Math.max(12, Math.round(textSize * 0.7))}px`,
-                      color: textColor,
-                      opacity: textOpacity,
-                      fontWeight: 'bold',
-                      lineHeight: 1.2
+                    key={item.id}
+                    onPointerDown={(e) => handleTextOverlayPointerDown(e, item.id)}
+                    onPointerMove={handleTextOverlayPointerMove}
+                    onPointerUp={handleTextOverlayPointerUp}
+                    onDoubleClick={() => {
+                      handleSelectTextItem(item.id);
+                      if (activeTool !== 'text') setActiveTool('text');
                     }}
-                    className="whitespace-nowrap"
+                    className={`absolute z-20 cursor-move select-none transition-shadow ${
+                      isSelected
+                        ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-950/80 shadow-2xl'
+                        : 'hover:ring-1 hover:ring-indigo-400/60'
+                    }`}
+                    style={{
+                      left: `${leftPx}px`,
+                      top: `${topPx}px`,
+                      backgroundColor: item.hasBackground ? item.backgroundColor : 'transparent',
+                      borderRadius: item.hasBackground ? `${scaledRadius}px` : '0px',
+                      borderWidth: item.hasBackground && scaledBorderWidth > 0 ? `${scaledBorderWidth}px` : undefined,
+                      borderColor: item.hasBackground && scaledBorderWidth > 0 ? item.borderColor : undefined,
+                      borderStyle: item.hasBackground && scaledBorderWidth > 0 ? item.borderStyle : undefined,
+                      padding: item.hasBackground ? `${scaledPadY}px ${scaledPadX}px` : '0px',
+                      opacity: item.opacity
+                    }}
+                    title="더블클릭하여 텍스트 수정, 드래그하여 이동"
                   >
-                    {textString || '(텍스트)'}
+                    <div
+                      style={{
+                        fontFamily: item.fontFamily,
+                        fontSize: `${scaledFontSize}px`,
+                        color: item.color,
+                        fontWeight: 'bold',
+                        lineHeight: 1.2
+                      }}
+                      className="whitespace-nowrap"
+                    >
+                      {item.text || '(텍스트)'}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })}
 
               {/* Guidelines Overlay anchored directly to Image (Grid + Draggable Horizontal & Vertical Baselines) */}
               {activeTool === 'rotate' && (
@@ -1411,7 +1585,7 @@ export const ImageEditView: React.FC = () => {
                         onPointerDown={handleGuideLineHPointerDown}
                         title="가로 기준선 (이미지 기준 동일 위치 고정, 드래그하여 이동)"
                       >
-                        <div className="w-full h-0.5 bg-gradient-to-r from-amber-400 via-amber-300 to-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.9)] group-hover:h-1 transition-all" />
+                        <div className="w-full h-[1px] bg-amber-400" />
                       </div>
 
                       {/* Vertical Baseline (Fixed position relative to image, plumb reference) */}
@@ -1427,7 +1601,7 @@ export const ImageEditView: React.FC = () => {
                         onPointerDown={handleGuideLineVPointerDown}
                         title="세로 기준선 (이미지 기준 동일 위치 고정, 드래그하여 이동)"
                       >
-                        <div className="h-full w-0.5 bg-gradient-to-b from-cyan-400 via-cyan-300 to-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.9)] group-hover:w-1 transition-all" />
+                        <div className="h-full w-[1px] bg-cyan-400" />
                       </div>
                     </>
                   )}
@@ -1438,7 +1612,7 @@ export const ImageEditView: React.FC = () => {
             {/* Floating Zoom Control Bar (Bottom-Center) */}
             <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 p-1.5 rounded-xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md text-xs select-none">
               <button
-                onClick={() => setZoomLevel((prev) => Math.max(0.25, Number((prev - 0.25).toFixed(2))))}
+                onClick={() => setZoomLevel((prev) => Math.max(0.1, Number((prev - 0.1).toFixed(2))))}
                 className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
                 title="축소 (Zoom Out)"
               >
@@ -1446,18 +1620,15 @@ export const ImageEditView: React.FC = () => {
               </button>
 
               <button
-                onClick={() => {
-                  setZoomLevel(1.0);
-                  setPanOffset({ x: 0, y: 0 });
-                }}
-                className="px-2 py-0.5 rounded-lg font-mono font-bold text-[11px] text-indigo-300 hover:bg-slate-800 transition cursor-pointer"
-                title="100% 원본 크기"
+                onClick={handleResetTo100}
+                className="px-2.5 py-1 rounded-lg font-mono font-bold text-sm text-indigo-300 hover:bg-slate-800 transition cursor-pointer"
+                title="100% 원본 픽셀 크기 (1:1 픽셀 매칭)"
               >
                 {Math.round(zoomLevel * 100)}%
               </button>
 
               <button
-                onClick={() => setZoomLevel((prev) => Math.min(5.0, Number((prev + 0.25).toFixed(2))))}
+                onClick={() => setZoomLevel((prev) => Math.min(5.0, Number((prev + 0.1).toFixed(2))))}
                 className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
                 title="확대 (Zoom In)"
               >
@@ -1467,12 +1638,9 @@ export const ImageEditView: React.FC = () => {
               <div className="h-3 w-px bg-slate-700 mx-0.5" />
 
               <button
-                onClick={() => {
-                  setZoomLevel(1.0);
-                  setPanOffset({ x: 0, y: 0 });
-                }}
-                className="px-2 py-1 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white text-[10px] font-semibold transition cursor-pointer flex items-center gap-1"
-                title="화면 맞춤 (Fit to Viewport)"
+                onClick={handleFitToScreen}
+                className="px-2.5 py-1 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold transition cursor-pointer flex items-center gap-1.5"
+                title="화면 맞춤 (가용 화면에 꽉 채우기)"
               >
                 <Maximize className="w-3 h-3 text-indigo-400" />
                 <span>화면 맞춤</span>
@@ -1517,8 +1685,8 @@ export const ImageEditView: React.FC = () => {
                   })}
                 </div>
               ) : (
-                <div className="w-44 shrink-0 p-2 rounded-2xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md space-y-2 max-h-[calc(100vh-145px)] overflow-y-auto">
-                  <div className="text-[10px] font-bold text-slate-400 px-2 py-0.5 border-b border-slate-800/80 flex items-center justify-between">
+                <div className="w-48 shrink-0 p-2 rounded-2xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md space-y-2 max-h-[calc(100vh-145px)] overflow-y-auto">
+                  <div className="text-xs font-bold text-slate-300 px-2 py-1 border-b border-slate-800/80 flex items-center justify-between">
                     <span>도구 팔레트</span>
                     <button
                       onClick={() => setIsPaletteCollapsed(true)}
@@ -1544,7 +1712,7 @@ export const ImageEditView: React.FC = () => {
                           }`}
                         >
                           <IconComponent className="w-4 h-4 shrink-0" />
-                          <span className="text-xs font-semibold leading-tight truncate">{tool.label}</span>
+                          <span className="text-sm font-semibold leading-tight truncate">{tool.label}</span>
                         </button>
                       );
                     })}
@@ -1552,14 +1720,14 @@ export const ImageEditView: React.FC = () => {
 
                   <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
                     <div className="p-2 rounded-xl bg-slate-950/70 border border-slate-800/80 text-[11px] font-mono space-y-0.5">
-                      <div className="text-[10px] text-slate-400">캔버스 해상도</div>
-                      <div className="font-bold text-white tracking-tight">
+                      <div className="text-xs text-slate-300 font-medium">캔버스 해상도</div>
+                      <div className="text-sm font-bold text-white tracking-tight">
                         {currentCanvas.width} × {currentCanvas.height} px
                       </div>
                     </div>
 
-                    <div className="text-[10px] text-center text-slate-400 px-2 py-1.5 rounded-lg bg-slate-950/50 border border-slate-800/60 leading-tight">
-                      <kbd className="px-1 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[9px] border border-slate-700">Ctrl+V</kbd> 새 이미지 교체
+                    <div className="text-xs text-center text-slate-300 px-2 py-1.5 rounded-lg bg-slate-950/50 border border-slate-800/60 leading-tight">
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[11px] border border-slate-700">Ctrl+V</kbd> 새 이미지 교체
                     </div>
                   </div>
                 </div>
@@ -1617,9 +1785,9 @@ export const ImageEditView: React.FC = () => {
               {activeTool === 'crop' && (
                 <div className="space-y-3 text-xs">
                   <div className="space-y-1.5">
-                    <div className="flex justify-between text-[11px] text-slate-400">
+                    <div className="flex justify-between text-sm text-slate-300 font-medium">
                       <span>Auto Crop 여백 감도</span>
-                      <span className="font-mono text-indigo-300 font-bold">{cropTolerance}%</span>
+                      <span className="font-mono text-indigo-300 font-bold text-sm">{cropTolerance}%</span>
                     </div>
                     <input
                       type="range"
@@ -1648,14 +1816,7 @@ export const ImageEditView: React.FC = () => {
                     </button>
                   </div>
 
-                  <button
-                    onClick={handleApplyCrop}
-                    className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-indigo-500/40 font-bold text-xs transition cursor-pointer flex items-center justify-center gap-1.5"
-                  >
-                    <Scissors className="w-3.5 h-3.5" />
-                    <span>자르기 적용</span>
-                  </button>
-                </div>
+                  </div>
               )}
 
               {/* ---------------- Tool 2: 이미지 크기 ---------------- */}
@@ -1789,7 +1950,7 @@ export const ImageEditView: React.FC = () => {
                                   : 'bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-800'
                               }`}
                             >
-                              <span className="text-sm font-mono leading-none">{arrow}</span>
+                              <span className={`${['↑', '↓', '←', '→'].includes(arrow) ? 'text-lg font-bold' : 'text-sm font-semibold'} font-mono leading-none`}>{arrow}</span>
                             </button>
                           );
                         })
@@ -2118,6 +2279,14 @@ export const ImageEditView: React.FC = () => {
                     <div className="flex items-center justify-between text-[11px]">
                       <span className="font-bold text-slate-300">제거할 대상 색상</span>
                       <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => pickColorFromEyeDropper(setBgColorTarget)}
+                          title="화면에서 색상 추출 (스포이트)"
+                          className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-indigo-400 transition cursor-pointer"
+                        >
+                          <Pipette className="w-3.5 h-3.5" />
+                        </button>
                         <input
                           type="color"
                           value={bgColorTarget}
@@ -2162,6 +2331,14 @@ export const ImageEditView: React.FC = () => {
                       <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-[11px]">
                         <span className="text-slate-300 font-medium">새로 채울 배경색:</span>
                         <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => pickColorFromEyeDropper(setBgColorNewColor)}
+                          title="화면에서 색상 추출 (스포이트)"
+                          className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-indigo-400 transition cursor-pointer"
+                        >
+                          <Pipette className="w-3.5 h-3.5" />
+                        </button>
                           <input
                             type="color"
                             value={bgColorNewColor}
@@ -2187,19 +2364,6 @@ export const ImageEditView: React.FC = () => {
                         <input
                           type="radio"
                           name="bgColorContiguous"
-                          checked={bgColorContiguous}
-                          onChange={() => setBgColorContiguous(true)}
-                          className="accent-indigo-500 mt-0.5"
-                        />
-                        <div>
-                          <span className="font-semibold text-white">외곽 연결 배경만 (권장)</span>
-                          <p className="text-[10px] text-slate-400">인물이나 물체 안쪽의 흰색(눈, 치아, 옷 등)을 안전하게 보존합니다</p>
-                        </div>
-                      </label>
-                      <label className="flex items-start gap-2 text-slate-300 cursor-pointer select-none pt-1 border-t border-slate-800/60">
-                        <input
-                          type="radio"
-                          name="bgColorContiguous"
                           checked={!bgColorContiguous}
                           onChange={() => setBgColorContiguous(false)}
                           className="accent-indigo-500 mt-0.5"
@@ -2207,6 +2371,19 @@ export const ImageEditView: React.FC = () => {
                         <div>
                           <span className="font-semibold text-white">전체 영역 동일 색상 제거</span>
                           <p className="text-[10px] text-slate-400">이미지 전체에서 일치하는 모든 색상을 투명화합니다</p>
+                        </div>
+                      </label>
+                      <label className="flex items-start gap-2 text-slate-300 cursor-pointer select-none pt-1 border-t border-slate-800/60">
+                        <input
+                          type="radio"
+                          name="bgColorContiguous"
+                          checked={bgColorContiguous}
+                          onChange={() => setBgColorContiguous(true)}
+                          className="accent-indigo-500 mt-0.5"
+                        />
+                        <div>
+                          <span className="font-semibold text-white">외곽 연결 배경만</span>
+                          <p className="text-[10px] text-slate-400">인물이나 물체 안쪽의 흰색(눈, 치아, 옷 등)을 안전하게 보존합니다</p>
                         </div>
                       </label>
                     </div>
@@ -2272,14 +2449,6 @@ export const ImageEditView: React.FC = () => {
 
                   {/* 7. Action Buttons */}
                   <div className="space-y-1.5 pt-1">
-                    <button
-                      onClick={handleApplyBgColor}
-                      className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-bold text-xs shadow-md shadow-indigo-600/25 transition cursor-pointer flex items-center justify-center gap-1.5"
-                    >
-                      <Check className="w-3.5 h-3.5" />
-                      <span>{bgColorReplaceMode === 'transparent' ? '배경 투명화 적용' : '배경색 변경 적용'}</span>
-                    </button>
-
                     <button
                       onClick={() => {
                         setBgColorTarget('#ffffff');
@@ -2696,314 +2865,547 @@ export const ImageEditView: React.FC = () => {
                 );
               })()}
 
-              {/* ---------------- Tool 6: 선명도 (게이지 미리보기 + 수치 입력) ---------------- */}
+              {/* ---------------- Tool: 선명도 / 블러 (통합 패널) ---------------- */}
               {activeTool === 'sharpen' && (
-                <div className="space-y-3 text-xs">
-                  <div className="space-y-1">
-                    <span className="text-slate-400 text-[10px]">선명도 강도 (%)</span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        value={sharpenAmount}
-                        onChange={(e) => setSharpenAmount(parseInt(e.target.value, 10) || 0)}
-                        className="flex-1 h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                      />
-                      <div className="flex items-center gap-1 w-20 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1">
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
-                          value={sharpenAmount}
-                          onChange={(e) => setSharpenAmount(Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)))}
-                          className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
-                        />
-                        <span className="text-[10px] text-slate-400">%</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => setSharpenAmount(0)}
-                    className="w-full py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs border border-slate-700 transition cursor-pointer flex items-center justify-center gap-1.5"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span>선명도 초기화</span>
-                  </button>
-                </div>
-              )}
-
-              {/* ---------------- Tool 7: 타일링 / 블러 (게이지 미리보기 + 수치 입력) ---------------- */}
-              {activeTool === 'mosaic' && (
-                <div className="space-y-3 text-xs">
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setMosaicType('mosaic')}
-                      className={`flex-1 py-1.5 rounded-xl border text-xs font-semibold cursor-pointer transition ${
-                        mosaicType === 'mosaic'
-                          ? 'border-sky-400 bg-sky-600/30 text-white'
-                          : 'border-slate-800 bg-slate-950 text-slate-400'
-                      }`}
-                    >
-                      모자이크 (타일링)
-                    </button>
-                    <button
-                      onClick={() => setMosaicType('blur')}
-                      className={`flex-1 py-1.5 rounded-xl border text-xs font-semibold cursor-pointer transition ${
-                        mosaicType === 'blur'
-                          ? 'border-sky-400 bg-sky-600/30 text-white'
-                          : 'border-slate-800 bg-slate-950 text-slate-400'
-                      }`}
-                    >
-                      가우시안 블러 (흐림)
-                    </button>
-                  </div>
-
-                  <div className="space-y-1">
-                    <span className="text-slate-400 text-[10px]">
-                      {mosaicType === 'mosaic' ? '타일 크기 (px)' : '블러 반경 (px)'}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        min="4"
-                        max="50"
-                        value={mosaicSize}
-                        onChange={(e) => setMosaicSize(parseInt(e.target.value, 10) || 4)}
-                        className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
-                      />
-                      <div className="flex items-center gap-1 w-20 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1">
-                        <input
-                          type="number"
-                          min="4"
-                          max="100"
-                          value={mosaicSize}
-                          onChange={(e) => setMosaicSize(Math.max(2, parseInt(e.target.value, 10) || 4))}
-                          className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
-                        />
-                        <span className="text-[10px] text-slate-400">px</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {mosaicSelection && (
-                    <div className="text-[11px] text-slate-300 font-mono bg-slate-950 p-2 rounded-lg border border-slate-800 flex justify-between items-center">
-                      <span>선택 영역</span>
-                      <span className="text-sky-400">{mosaicSelection.width} × {mosaicSelection.height} px</span>
-                    </div>
-                  )}
-
-                  {mosaicSelection && (
-                    <button
-                      onClick={() => setMosaicSelection(null)}
-                      className="w-full py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs transition cursor-pointer"
-                    >
-                      영역 선택 해제
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* ---------------- Tool 8: 텍스트 (텍스트 색상, 배경 색상, 모서리, 테두리 수치 입력) ---------------- */}
-              {activeTool === 'text' && (
-                <div className="space-y-3 text-xs">
-                  <div className="space-y-1">
-                    <span className="text-slate-400 text-[10px]">입력할 텍스트</span>
-                    <input
-                      type="text"
-                      value={textString}
-                      onChange={(e) => setTextString(e.target.value)}
-                      placeholder="텍스트 입력"
-                      className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <span className="text-slate-400 text-[10px]">기본 시스템 폰트</span>
-                    <select
-                      value={textFont}
-                      onChange={(e) => setTextFont(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs focus:outline-none focus:border-indigo-500"
-                    >
-                      {SYSTEM_FONTS.map((group) => (
-                        <optgroup key={group.category} label={group.category} className="bg-slate-900 text-slate-200 font-semibold">
-                          {group.fonts.map((f) => (
-                            <option key={f.name} value={f.value} className="bg-slate-950 text-white font-normal">
-                              {f.name}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* 폰트 크기: Slider (좌) + Number (우, px) */}
-                  <div className="space-y-1">
-                    <span className="text-slate-400 text-[10px]">폰트 크기 (px)</span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        min="12"
-                        max="160"
-                        value={textSize}
-                        onChange={(e) => setTextSize(parseInt(e.target.value, 10) || 12)}
-                        className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
-                      />
-                      <div className="flex items-center gap-1 w-20 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1">
-                        <input
-                          type="number"
-                          min="10"
-                          max="300"
-                          value={textSize}
-                          onChange={(e) => setTextSize(Math.max(8, parseInt(e.target.value, 10) || 12))}
-                          className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
-                        />
-                        <span className="text-[10px] text-slate-400">px</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 투명도: Slider (좌) + Number (우, %) */}
-                  <div className="space-y-1">
-                    <span className="text-slate-400 text-[10px]">투명도 (%)</span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        min="5"
-                        max="100"
-                        value={Math.round(textOpacity * 100)}
-                        onChange={(e) => setTextOpacity((parseInt(e.target.value, 10) || 5) / 100)}
-                        className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
-                      />
-                      <div className="flex items-center gap-1 w-20 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1">
-                        <input
-                          type="number"
-                          min="5"
-                          max="100"
-                          value={Math.round(textOpacity * 100)}
-                          onChange={(e) => setTextOpacity(Math.min(100, Math.max(5, parseInt(e.target.value, 10) || 5)) / 100)}
-                          className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
-                        />
-                        <span className="text-[10px] text-slate-400">%</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 텍스트 색상 */}
-                  <div className="flex items-center justify-between text-xs pt-1">
-                    <span className="text-slate-400">텍스트 색상</span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="color"
-                        value={textColor}
-                        onChange={(e) => setTextColor(e.target.value)}
-                        className="w-7 h-7 rounded border border-slate-700 bg-slate-950 cursor-pointer"
-                      />
-                      <input
-                        type="text"
-                        value={textColor}
-                        onChange={(e) => setTextColor(e.target.value)}
-                        className="w-20 px-2 py-1 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-xs text-center focus:outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  {/* 배경 색상 */}
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-400">배경 색상</span>
-                    <div className="flex items-center gap-2">
-                      <label className="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={hasTextBg}
-                          onChange={(e) => setHasTextBg(e.target.checked)}
-                          className="accent-indigo-500 rounded"
-                        />
-                        <span>사용</span>
-                      </label>
-                      {hasTextBg && (
-                        <>
-                          <input
-                            type="color"
-                            value={textBgColor}
-                            onChange={(e) => setTextBgColor(e.target.value)}
-                            className="w-7 h-7 rounded border border-slate-700 bg-slate-950 cursor-pointer"
-                          />
-                          <input
-                            type="text"
-                            value={textBgColor}
-                            onChange={(e) => setTextBgColor(e.target.value)}
-                            className="w-20 px-2 py-1 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-xs text-center focus:outline-none"
-                          />
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* 모서리: Slider (좌) + Number (우, px) */}
-                  {hasTextBg && (
+                <div className="space-y-3.5 text-xs">
+                  {/* 1. 선명도 (Sharpen) */}
+                  <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-1.5">
+                    <span className="font-bold text-slate-300 text-[11px]">선명도 조절</span>
                     <div className="space-y-1">
-                      <span className="text-slate-400 text-[10px]">모서리 (px)</span>
+                      <div className="flex justify-between text-[10px]">
+                        <span className="text-slate-400">선명도 강도 (%)</span>
+                        <span className="font-mono text-indigo-400 font-bold">{sharpenAmount}%</span>
+                      </div>
                       <div className="flex items-center gap-2">
                         <input
                           type="range"
                           min="0"
-                          max="60"
-                          value={textBorderRadius}
-                          onChange={(e) => setTextBorderRadius(parseInt(e.target.value, 10) || 0)}
+                          max="100"
+                          value={sharpenAmount}
+                          onChange={(e) => setSharpenAmount(parseInt(e.target.value, 10) || 0)}
                           className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
                         />
-                        <div className="flex items-center gap-1 w-20 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1">
+                        <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5">
                           <input
                             type="number"
                             min="0"
                             max="100"
-                            value={textBorderRadius}
-                            onChange={(e) => setTextBorderRadius(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                            value={sharpenAmount}
+                            onChange={(e) => setSharpenAmount(Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)))}
+                            className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                          />
+                          <span className="text-[10px] text-slate-400">%</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 2. 텍스트 / 선 굵게 (자연스러운 볼드 효과) */}
+                  <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-bold text-slate-300">텍스트 / 선 굵게 (진하게)</span>
+                      <span className="text-[10px] text-indigo-400 font-mono">
+                        {textThickenStrength === 0 ? '꺼짐' : textThickenStrength === 1 ? '1단계' : '2단계'}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400">
+                      너무 얇은 글자나 선을 1~2px 자연스럽게 볼드화하여 가독성을 높입니다.
+                    </p>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {[
+                        { level: 0, label: '없음' },
+                        { level: 1, label: '1단계 (자연스러움)' },
+                        { level: 2, label: '2단계 (더 굵게)' },
+                      ].map((item) => (
+                        <button
+                          key={item.level}
+                          onClick={() => setTextThickenStrength(item.level)}
+                          className={`py-1.5 px-1 rounded-lg border text-xs font-semibold cursor-pointer transition text-center truncate ${
+                            textThickenStrength === item.level
+                              ? 'border-indigo-400 bg-indigo-600/30 text-white shadow-sm'
+                              : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 3. 타일링 / 블러 (영역 가림) */}
+                  <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-bold text-slate-300">타일링 / 블러 (영역 가림)</span>
+                      <span className="text-[10px] text-sky-400 font-mono">화면 드래그</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setMosaicType('mosaic')}
+                        className={`flex-1 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer transition ${
+                          mosaicType === 'mosaic'
+                            ? 'border-sky-400 bg-sky-600/30 text-white'
+                            : 'border-slate-800 bg-slate-900 text-slate-400'
+                        }`}
+                      >
+                        모자이크 (타일링)
+                      </button>
+                      <button
+                        onClick={() => setMosaicType('blur')}
+                        className={`flex-1 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer transition ${
+                          mosaicType === 'blur'
+                            ? 'border-sky-400 bg-sky-600/30 text-white'
+                            : 'border-slate-800 bg-slate-900 text-slate-400'
+                        }`}
+                      >
+                        가우시안 블러
+                      </button>
+                    </div>
+
+                    <div className="space-y-1">
+                      <span className="text-slate-400 text-[10px]">
+                        {mosaicType === 'mosaic' ? '타일 크기 (px)' : '블러 반경 (px)'}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="range"
+                          min="4"
+                          max="50"
+                          value={mosaicSize}
+                          onChange={(e) => setMosaicSize(parseInt(e.target.value, 10) || 4)}
+                          className="flex-1 h-1.5 bg-slate-800 rounded accent-sky-500 cursor-pointer"
+                        />
+                        <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5">
+                          <input
+                            type="number"
+                            min="2"
+                            max="100"
+                            value={mosaicSize}
+                            onChange={(e) => setMosaicSize(Math.max(2, parseInt(e.target.value, 10) || 4))}
                             className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
                           />
                           <span className="text-[10px] text-slate-400">px</span>
                         </div>
                       </div>
                     </div>
+
+                    {mosaicSelection && (
+                      <div className="text-[11px] text-slate-300 font-mono bg-slate-900/90 p-2 rounded-lg border border-slate-800 flex justify-between items-center">
+                        <span>선택 영역</span>
+                        <span className="text-sky-400">{mosaicSelection.width} × {mosaicSelection.height} px</span>
+                      </div>
+                    )}
+
+                    {mosaicSelection && (
+                      <button
+                        onClick={() => setMosaicSelection(null)}
+                        className="w-full py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition cursor-pointer"
+                      >
+                        영역 선택 해제
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setSharpenAmount(0);
+                      setTextThickenStrength(0);
+                      setMosaicSelection(null);
+                    }}
+                    className="w-full py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs border border-slate-700 transition cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>선명도 / 블러 초기화</span>
+                  </button>
+                </div>
+              )}
+
+              {/* ---------------- Tool 8: 텍스트 (객체 기반 텍스트 시스템) ---------------- */}
+              {activeTool === 'text' && (
+                <div className="space-y-3.5 text-xs">
+                  {/* [+ 텍스트 추가] 버튼 */}
+                  <button
+                    onClick={handleAddTextItem}
+                    className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-bold text-xs shadow-md shadow-indigo-600/30 transition cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>텍스트 추가</span>
+                  </button>
+
+                  {/* 텍스트 객체 목록 */}
+                  {textItems.length > 0 ? (
+                    <div className="space-y-1.5">
+                      <span className="text-slate-400 text-[10px] font-semibold">텍스트 객체 목록 ({textItems.length}개)</span>
+                      <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-1 bg-slate-950/60 rounded-xl border border-slate-800">
+                        {textItems.map((item, idx) => (
+                          <div
+                            key={item.id}
+                            onClick={() => handleSelectTextItem(item.id)}
+                            className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs cursor-pointer transition border ${
+                              selectedTextId === item.id
+                                ? 'bg-indigo-600/30 border-indigo-400 text-white font-semibold'
+                                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            <span className="truncate max-w-[100px]">{item.text || `#${idx + 1}`}</span>
+                            {selectedTextId === item.id && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteSelectedText();
+                                }}
+                                className="p-0.5 hover:text-rose-400"
+                                title="텍스트 삭제"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3 rounded-xl bg-slate-950/50 border border-slate-800/80 text-center text-slate-400 text-xs">
+                      [+ 텍스트 추가] 버튼을 눌러 새 텍스트를 배치하세요.
+                    </div>
                   )}
 
-                  {/* 테두리: Slider (좌) + Number (우, px) */}
-                  {hasTextBg && (
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-400 text-[10px]">테두리 (px)</span>
-                        {textBorderWidth > 0 && (
+                  {/* 선택된 텍스트 속성 편집 */}
+                  {selectedTextId && (
+                    <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-3">
+                      {/* 입력할 텍스트 */}
+                      <div className="space-y-1">
+                        <span className="text-slate-400 text-[10px]">입력할 텍스트 내용</span>
+                        <input
+                          type="text"
+                          value={textString}
+                          onChange={(e) => {
+                            setTextString(e.target.value);
+                            updateSelectedTextProperty({ text: e.target.value });
+                          }}
+                          placeholder="텍스트 입력"
+                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+
+                      {/* 폰트 선택 */}
+                      <div className="space-y-1">
+                        <span className="text-slate-400 text-[10px]">폰트 (글꼴)</span>
+                        <select
+                          value={textFont}
+                          onChange={(e) => {
+                            setTextFont(e.target.value);
+                            updateSelectedTextProperty({ fontFamily: e.target.value });
+                          }}
+                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs focus:outline-none focus:border-indigo-500"
+                        >
+                          {SYSTEM_FONTS.map((group) => (
+                            <optgroup key={group.category} label={group.category} className="bg-slate-900 text-slate-200 font-semibold">
+                              {group.fonts.map((f) => (
+                                <option key={f.name} value={f.value} className="bg-slate-950 text-white font-normal">
+                                  {f.name}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* 폰트 크기 */}
+                      <div className="space-y-1">
+                        <span className="text-slate-400 text-[10px]">폰트 크기 (px)</span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min="12"
+                            max="180"
+                            value={textSize}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10) || 12;
+                              setTextSize(val);
+                              updateSelectedTextProperty({ fontSize: val });
+                            }}
+                            className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
+                          />
+                          <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-900 border border-slate-700 rounded-lg px-2 py-0.5">
+                            <input
+                              type="number"
+                              min="8"
+                              max="300"
+                              value={textSize}
+                              onChange={(e) => {
+                                const val = Math.max(8, parseInt(e.target.value, 10) || 12);
+                                setTextSize(val);
+                                updateSelectedTextProperty({ fontSize: val });
+                              }}
+                              className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                            />
+                            <span className="text-[10px] text-slate-400">px</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 투명도 (기본 100%) */}
+                      <div className="space-y-1">
+                        <span className="text-slate-400 text-[10px]">투명도 (%)</span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min="5"
+                            max="100"
+                            value={Math.round(textOpacity * 100)}
+                            onChange={(e) => {
+                              const val = (parseInt(e.target.value, 10) || 5) / 100;
+                              setTextOpacity(val);
+                              updateSelectedTextProperty({ opacity: val });
+                            }}
+                            className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
+                          />
+                          <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-900 border border-slate-700 rounded-lg px-2 py-0.5">
+                            <input
+                              type="number"
+                              min="5"
+                              max="100"
+                              value={Math.round(textOpacity * 100)}
+                              onChange={(e) => {
+                                const val = Math.min(100, Math.max(5, parseInt(e.target.value, 10) || 5)) / 100;
+                                setTextOpacity(val);
+                                updateSelectedTextProperty({ opacity: val });
+                              }}
+                              className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                            />
+                            <span className="text-[10px] text-slate-400">%</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 텍스트 색상 + 스포이트 */}
+                      <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/80">
+                        <span className="text-slate-300 font-medium">텍스트 색상</span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => pickColorFromEyeDropper((col) => {
+                              setTextColor(col);
+                              updateSelectedTextProperty({ color: col });
+                            })}
+                            title="스포이트로 색상 추출"
+                            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-indigo-400 transition cursor-pointer"
+                          >
+                            <Pipette className="w-3.5 h-3.5" />
+                          </button>
+                          <input
+                            type="color"
+                            value={textColor}
+                            onChange={(e) => {
+                              setTextColor(e.target.value);
+                              updateSelectedTextProperty({ color: e.target.value });
+                            }}
+                            className="w-6 h-6 rounded border border-slate-700 bg-slate-900 cursor-pointer"
+                          />
+                          <input
+                            type="text"
+                            value={textColor}
+                            onChange={(e) => {
+                              setTextColor(e.target.value);
+                              updateSelectedTextProperty({ color: e.target.value });
+                            }}
+                            className="w-16 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-center text-white font-mono text-xs focus:outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      {/* 배경 색상 + 체크박스 토글 + 스포이트 */}
+                      <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/80">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-slate-300 font-medium">배경 색상</span>
+                          <input
+                            type="checkbox"
+                            checked={hasTextBg}
+                            onChange={(e) => {
+                              setHasTextBg(e.target.checked);
+                              updateSelectedTextProperty({ hasBackground: e.target.checked });
+                            }}
+                            className="accent-indigo-500 rounded cursor-pointer"
+                          />
+                        </div>
+                        {hasTextBg && (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => pickColorFromEyeDropper((col) => {
+                                setTextBgColor(col);
+                                updateSelectedTextProperty({ backgroundColor: col });
+                              })}
+                              title="스포이트로 색상 추출"
+                              className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-indigo-400 transition cursor-pointer"
+                            >
+                              <Pipette className="w-3.5 h-3.5" />
+                            </button>
+                            <input
+                              type="color"
+                              value={textBgColor}
+                              onChange={(e) => {
+                                setTextBgColor(e.target.value);
+                                updateSelectedTextProperty({ backgroundColor: e.target.value });
+                              }}
+                              className="w-6 h-6 rounded border border-slate-700 bg-slate-900 cursor-pointer"
+                            />
+                            <input
+                              type="text"
+                              value={textBgColor}
+                              onChange={(e) => {
+                                setTextBgColor(e.target.value);
+                                updateSelectedTextProperty({ backgroundColor: e.target.value });
+                              }}
+                              className="w-16 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-center text-white font-mono text-xs focus:outline-none"
+                            />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 테두리 색상 (배경 색상 항목 아래에 기본으로 노출!) + 스포이트 */}
+                      <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/80">
+                        <span className="text-slate-300 font-medium">테두리 색상</span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => pickColorFromEyeDropper((col) => {
+                              setTextBorderColor(col);
+                              updateSelectedTextProperty({ borderColor: col });
+                            })}
+                            title="스포이트로 색상 추출"
+                            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-indigo-400 transition cursor-pointer"
+                          >
+                            <Pipette className="w-3.5 h-3.5" />
+                          </button>
                           <input
                             type="color"
                             value={textBorderColor}
-                            onChange={(e) => setTextBorderColor(e.target.value)}
-                            className="w-5 h-5 rounded border border-slate-700 bg-slate-950 cursor-pointer"
+                            onChange={(e) => {
+                              setTextBorderColor(e.target.value);
+                              updateSelectedTextProperty({ borderColor: e.target.value });
+                            }}
+                            className="w-6 h-6 rounded border border-slate-700 bg-slate-900 cursor-pointer"
                           />
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="range"
-                          min="0"
-                          max="20"
-                          value={textBorderWidth}
-                          onChange={(e) => setTextBorderWidth(parseInt(e.target.value, 10) || 0)}
-                          className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
-                        />
-                        <div className="flex items-center gap-1 w-20 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1">
                           <input
-                            type="number"
-                            min="0"
-                            max="40"
-                            value={textBorderWidth}
-                            onChange={(e) => setTextBorderWidth(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                            className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                            type="text"
+                            value={textBorderColor}
+                            onChange={(e) => {
+                              setTextBorderColor(e.target.value);
+                              updateSelectedTextProperty({ borderColor: e.target.value });
+                            }}
+                            className="w-16 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-center text-white font-mono text-xs focus:outline-none"
                           />
-                          <span className="text-[10px] text-slate-400">px</span>
                         </div>
                       </div>
+
+                      {/* 테두리 스타일: 실선, 점선, 둥근 점선(원형점) 선택 */}
+                      <div className="space-y-1">
+                        <span className="text-slate-400 text-[10px]">테두리 선 모양</span>
+                        <div className="grid grid-cols-3 gap-1">
+                          {[
+                            { id: 'solid', label: '실선' },
+                            { id: 'dashed', label: '점선' },
+                            { id: 'dotted', label: '둥근 점' },
+                          ].map((style) => (
+                            <button
+                              key={style.id}
+                              type="button"
+                              onClick={() => {
+                                const val = style.id as 'solid' | 'dashed' | 'dotted';
+                                setTextBorderStyle(val);
+                                updateSelectedTextProperty({ borderStyle: val });
+                              }}
+                              className={`py-1 rounded-lg border text-xs font-semibold cursor-pointer transition text-center ${
+                                textBorderStyle === style.id
+                                  ? 'border-indigo-400 bg-indigo-600/30 text-white shadow-sm'
+                                  : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              {style.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* 테두리 두께 (px) */}
+                      <div className="space-y-1">
+                        <span className="text-slate-400 text-[10px]">테두리 두께 (px)</span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min="0"
+                            max="20"
+                            value={textBorderWidth}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10) || 0;
+                              setTextBorderWidth(val);
+                              updateSelectedTextProperty({ borderWidth: val });
+                            }}
+                            className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
+                          />
+                          <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-900 border border-slate-700 rounded-lg px-2 py-0.5">
+                            <input
+                              type="number"
+                              min="0"
+                              max="40"
+                              value={textBorderWidth}
+                              onChange={(e) => {
+                                const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                                setTextBorderWidth(val);
+                                updateSelectedTextProperty({ borderWidth: val });
+                              }}
+                              className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                            />
+                            <span className="text-[10px] text-slate-400">px</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 모서리 둥글게 (px) */}
+                      {hasTextBg && (
+                        <div className="space-y-1">
+                          <span className="text-slate-400 text-[10px]">배경 모서리 둥글게 (px)</span>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="range"
+                              min="0"
+                              max="60"
+                              value={textBorderRadius}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value, 10) || 0;
+                                setTextBorderRadius(val);
+                                updateSelectedTextProperty({ backgroundRadius: val });
+                              }}
+                              className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
+                            />
+                            <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-900 border border-slate-700 rounded-lg px-2 py-0.5">
+                              <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                value={textBorderRadius}
+                                onChange={(e) => {
+                                  const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                                  setTextBorderRadius(val);
+                                  updateSelectedTextProperty({ backgroundRadius: val });
+                                }}
+                                className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                              />
+                              <span className="text-[10px] text-slate-400">px</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 삭제 버튼 */}
+                      <button
+                        onClick={handleDeleteSelectedText}
+                        className="w-full py-1.5 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 font-semibold text-xs border border-rose-800/60 transition cursor-pointer flex items-center justify-center gap-1.5"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>선택된 텍스트 삭제</span>
+                      </button>
                     </div>
                   )}
                 </div>
