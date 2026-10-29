@@ -53,6 +53,7 @@ export interface WatermarkTextOptions {
   backgroundRadius?: number;
   borderWidth?: number;
   borderColor?: string;
+  borderStyle?: 'solid' | 'dashed' | 'dotted';
 }
 
 /**
@@ -471,7 +472,15 @@ export function applyTextWatermark(
     if (opts.borderWidth && opts.borderWidth > 0) {
       ctx.lineWidth = opts.borderWidth;
       ctx.strokeStyle = opts.borderColor || '#ffffff';
+      if (opts.borderStyle === 'dashed') {
+        ctx.setLineDash([opts.borderWidth * 3, opts.borderWidth * 2]);
+      } else if (opts.borderStyle === 'dotted') {
+        ctx.setLineDash([opts.borderWidth, opts.borderWidth * 1.5]);
+      } else {
+        ctx.setLineDash([]);
+      }
       ctx.stroke();
+      ctx.setLineDash([]);
     }
   }
 
@@ -479,6 +488,98 @@ export function applyTextWatermark(
   ctx.fillText(opts.text, x, y);
   ctx.restore();
 
+  return resCanvas;
+}
+
+/**
+ * Enhances thin text and fine line strokes (morphological thickening / dilation)
+ * amount: 0 to 100
+ * mode: 'dark' (for dark text on light bg) or 'light' (for light text on dark bg)
+ */
+export function applyStrokeBoldness(
+  canvas: HTMLCanvasElement,
+  amount: number,
+  mode: 'dark' | 'light' = 'dark'
+): HTMLCanvasElement {
+  if (amount <= 0) return canvas;
+
+  const resCanvas = document.createElement('canvas');
+  resCanvas.width = canvas.width;
+  resCanvas.height = canvas.height;
+  const ctx = resCanvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return canvas;
+
+  ctx.drawImage(canvas, 0, 0);
+  const w = canvas.width;
+  const h = canvas.height;
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const data = imgData.data;
+  const src = new Uint8ClampedArray(data);
+
+  const factor = Math.min(1.0, (amount / 100) * 0.85);
+
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const idx = (y * w + x) * 4;
+      const r = src[idx];
+      const g = src[idx + 1];
+      const b = src[idx + 2];
+      const a = src[idx + 3];
+
+      if (a < 10) continue;
+
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+      // Check 4-connected neighbors
+      const nIdxs = [
+        ((y - 1) * w + x) * 4,
+        ((y + 1) * w + x) * 4,
+        (y * w + (x - 1)) * 4,
+        (y * w + (x + 1)) * 4
+      ];
+
+      let targetR = r;
+      let targetG = g;
+      let targetB = b;
+      let extremeLum = lum;
+
+      for (let i = 0; i < 4; i++) {
+        const ni = nIdxs[i];
+        const nr = src[ni];
+        const ng = src[ni + 1];
+        const nb = src[ni + 2];
+        const nLum = 0.299 * nr + 0.587 * ng + 0.114 * nb;
+
+        if (mode === 'dark') {
+          if (nLum < extremeLum) {
+            extremeLum = nLum;
+            targetR = nr;
+            targetG = ng;
+            targetB = nb;
+          }
+        } else {
+          if (nLum > extremeLum) {
+            extremeLum = nLum;
+            targetR = nr;
+            targetG = ng;
+            targetB = nb;
+          }
+        }
+      }
+
+      if (mode === 'dark' && extremeLum < lum) {
+        data[idx] = Math.round(r * (1 - factor) + targetR * factor);
+        data[idx + 1] = Math.round(g * (1 - factor) + targetG * factor);
+        data[idx + 2] = Math.round(b * (1 - factor) + targetB * factor);
+      } else if (mode === 'light' && extremeLum > lum) {
+        data[idx] = Math.round(r * (1 - factor) + targetR * factor);
+        data[idx + 1] = Math.round(g * (1 - factor) + targetG * factor);
+        data[idx + 2] = Math.round(b * (1 - factor) + targetB * factor);
+      }
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
   return resCanvas;
 }
 
