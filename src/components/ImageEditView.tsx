@@ -166,6 +166,8 @@ export const ImageEditView: React.FC = () => {
   const [bgColorContiguous, setBgColorContiguous] = useState<boolean>(true); // default true for edge background removal
   const [bgColorReplaceMode, setBgColorReplaceMode] = useState<'transparent' | 'replace'>('transparent');
   const [bgColorNewColor, setBgColorNewColor] = useState<string>('#ffffff');
+  const [isBgColorModified, setIsBgColorModified] = useState<boolean>(false);
+  const [selectedBgPreset, setSelectedBgPreset] = useState<'white' | 'black' | 'all-white' | 'chroma' | null>(null);
 
   // Tool: 톤 커브 (Curves)
   const [curveBlacks, setCurveBlacks] = useState<number>(0);
@@ -233,6 +235,7 @@ export const ImageEditView: React.FC = () => {
   const displayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportContainerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const shouldFitOnImageLoadRef = useRef<boolean>(false);
 
   // Zoom & Pan State
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
@@ -300,6 +303,7 @@ export const ImageEditView: React.FC = () => {
         setCanvasTargetW(img.naturalWidth);
         setCanvasTargetH(img.naturalHeight);
         setCropRect({ x: 0, y: 0, width: img.naturalWidth, height: img.naturalHeight });
+        shouldFitOnImageLoadRef.current = true;
         const initFit = calculateFitScale(img.naturalWidth, img.naturalHeight);
         setZoomLevel(initFit);
         setPanOffset({ x: 0, y: 0 });
@@ -348,7 +352,7 @@ export const ImageEditView: React.FC = () => {
 
     let preview = currentCanvas;
 
-    if (activeTool === 'bgcolor') {
+    if (activeTool === 'bgcolor' && isBgColorModified) {
       preview = applyBackgroundColorAdjustment(currentCanvas, {
         targetColor: bgColorTarget,
         tolerance: bgColorTolerance,
@@ -478,6 +482,8 @@ export const ImageEditView: React.FC = () => {
     setBgColorSmoothness(6);
     setBgColorContiguous(true);
     setBgColorReplaceMode('transparent');
+    setIsBgColorModified(false);
+    setSelectedBgPreset(null);
   };
 
   // Delete Image
@@ -499,6 +505,8 @@ export const ImageEditView: React.FC = () => {
     setBgColorSmoothness(6);
     setBgColorContiguous(true);
     setBgColorReplaceMode('transparent');
+    setIsBgColorModified(false);
+    setSelectedBgPreset(null);
   };
 
   const handleApplyBgColor = () => {
@@ -545,7 +553,11 @@ export const ImageEditView: React.FC = () => {
         handleApplyFineRotate();
       }
     } else if (activeTool === 'bgcolor') {
-      handleApplyBgColor();
+      if (isBgColorModified) {
+        handleApplyBgColor();
+        setIsBgColorModified(false);
+        setSelectedBgPreset(null);
+      }
     } else if (activeTool === 'color') {
       if (brightness !== 0 || contrast !== 0 || saturation !== 0) {
         pushHistory(currentCanvas);
@@ -597,6 +609,10 @@ export const ImageEditView: React.FC = () => {
     if (newTool === activeTool) return;
     if (activeTool !== 'text') {
       handleApplyCurrentTool();
+    }
+    if (activeTool === 'bgcolor') {
+      setIsBgColorModified(false);
+      setSelectedBgPreset(null);
     }
     setActiveTool(newTool);
   };
@@ -932,13 +948,25 @@ export const ImageEditView: React.FC = () => {
 
     // Calculate scale for fitting canvas inside viewport with padding
   const calculateFitScale = useCallback((canvasW: number, canvasH: number): number => {
-    if (!viewportContainerRef.current || canvasW <= 0 || canvasH <= 0) return 1.0;
-    const vpRect = viewportContainerRef.current.getBoundingClientRect();
-    const availW = Math.max(100, vpRect.width - 64);
-    const availH = Math.max(100, vpRect.height - 64);
+    if (canvasW <= 0 || canvasH <= 0) return 1.0;
+    let availW = 800;
+    let availH = 600;
+
+    if (viewportContainerRef.current) {
+      const vpRect = viewportContainerRef.current.getBoundingClientRect();
+      if (vpRect.width > 0 && vpRect.height > 0) {
+        availW = Math.max(100, vpRect.width - 64);
+        availH = Math.max(100, vpRect.height - 64);
+      }
+    } else if (typeof window !== 'undefined') {
+      availW = Math.max(100, (window.innerWidth || 1200) - 80);
+      availH = Math.max(100, (window.innerHeight || 800) - 160);
+    }
+
     const scaleW = availW / canvasW;
     const scaleH = availH / canvasH;
-    return Number(Math.min(scaleW, scaleH, 1.0).toFixed(2));
+    const fitScale = Math.min(scaleW, scaleH, 1.0);
+    return Number(Math.max(0.05, fitScale).toFixed(2));
   }, []);
 
   const handleFitToScreen = useCallback(() => {
@@ -947,6 +975,17 @@ export const ImageEditView: React.FC = () => {
     setZoomLevel(fitScale);
     setPanOffset({ x: 0, y: 0 });
   }, [currentCanvas, calculateFitScale]);
+
+  // Automatically fit canvas to screen when a new image is loaded and viewport is ready
+  useEffect(() => {
+    if (shouldFitOnImageLoadRef.current && currentCanvas) {
+      shouldFitOnImageLoadRef.current = false;
+      const rafId = requestAnimationFrame(() => {
+        handleFitToScreen();
+      });
+      return () => cancelAnimationFrame(rafId);
+    }
+  }, [currentCanvas, handleFitToScreen]);
 
   const handleResetTo100 = useCallback(() => {
     setZoomLevel(1.0); // 100% 1:1 original pixel actual size
@@ -962,7 +1001,7 @@ export const ImageEditView: React.FC = () => {
 
   const handleViewportBgPointerDown = (e: React.PointerEvent) => {
     if (activeTool === 'mosaic') return;
-    if (zoomLevel > 1 || e.button === 1 || e.altKey) {
+    if (e.pointerType === 'touch' || e.button === 0 || e.button === 1 || e.altKey) {
       isPanningRef.current = true;
       panStartRef.current = {
         clientX: e.clientX,
@@ -1073,10 +1112,69 @@ export const ImageEditView: React.FC = () => {
     return res;
   };
 
+  // Sample canvas perimeter/outer border to determine default text color (black vs white)
+  const getCanvasPerimeterLuminance = useCallback((canvas: HTMLCanvasElement): number => {
+    try {
+      const ctx = canvas.getContext('2d');
+      if (!ctx || canvas.width <= 0 || canvas.height <= 0) return 0.5;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      const borderThickness = Math.max(2, Math.min(20, Math.round(Math.min(w, h) * 0.05)));
+
+      let totalLum = 0;
+      let count = 0;
+
+      // Sample top & bottom borders
+      const topImg = ctx.getImageData(0, 0, w, borderThickness);
+      const bottomImg = ctx.getImageData(0, Math.max(0, h - borderThickness), w, borderThickness);
+      // Sample left & right borders
+      const leftImg = ctx.getImageData(0, 0, borderThickness, h);
+      const rightImg = ctx.getImageData(Math.max(0, w - borderThickness), 0, borderThickness, h);
+
+      const sampleData = (data: Uint8ClampedArray) => {
+        const step = Math.max(4, Math.floor(data.length / 400)) * 4;
+        for (let i = 0; i < data.length; i += step) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          totalLum += (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+          count++;
+        }
+      };
+
+      sampleData(topImg.data);
+      sampleData(bottomImg.data);
+      sampleData(leftImg.data);
+      sampleData(rightImg.data);
+
+      return count > 0 ? totalLum / count : 0.5;
+    } catch {
+      return 0.5;
+    }
+  }, []);
+
   const handleAddTextItem = () => {
     if (!currentCanvas) return;
     const newId = 'txt_' + Date.now();
     const defaultFontSize = Math.max(18, Math.min(72, Math.round(currentCanvas.width / 20)));
+
+    // Calculate default text color based on background luminance
+    let isBrightBg = false;
+    if (hasTextBg) {
+      const hex = textBgColor.replace('#', '');
+      const r = parseInt(hex.substring(0, 2), 16) || 0;
+      const g = parseInt(hex.substring(2, 4), 16) || 0;
+      const b = parseInt(hex.substring(4, 6), 16) || 0;
+      const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      isBrightBg = lum > 0.5;
+    } else {
+      const perimLum = getCanvasPerimeterLuminance(currentCanvas);
+      isBrightBg = perimLum > 0.5;
+    }
+    const defaultColor = isBrightBg ? '#000000' : '#ffffff';
+    setTextColor(defaultColor);
+
     const newItem: TextItem = {
       id: newId,
       text: textString.trim() || '텍스트 입력',
@@ -1084,7 +1182,7 @@ export const ImageEditView: React.FC = () => {
       y: Math.round(currentCanvas.height / 2),
       fontSize: defaultFontSize,
       fontFamily: textFont,
-      color: textColor,
+      color: defaultColor,
       opacity: textOpacity,
       hasBackground: hasTextBg,
       backgroundColor: textBgColor,
@@ -1122,11 +1220,26 @@ export const ImageEditView: React.FC = () => {
     }
   };
 
-  const handleDeleteSelectedText = () => {
+  const handleDeleteSelectedText = useCallback(() => {
     if (!selectedTextId) return;
     setTextItems((prev) => prev.filter((t) => t.id !== selectedTextId));
     setSelectedTextId(null);
-  };
+  }, [selectedTextId]);
+
+  // Keyboard shortcut to delete selected text object (Delete / Backspace)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!selectedTextId) return;
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const activeTag = (document.activeElement?.tagName || '').toLowerCase();
+        if (activeTag === 'input' || activeTag === 'textarea') return;
+        e.preventDefault();
+        handleDeleteSelectedText();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedTextId, handleDeleteSelectedText]);
 
   const handleTextOverlayPointerDown = (e: React.PointerEvent, id: string) => {
     e.stopPropagation();
@@ -1412,6 +1525,17 @@ export const ImageEditView: React.FC = () => {
           {/* ========================================================================= */}
           <div
             ref={viewportContainerRef}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                handleLoadFile(e.dataTransfer.files[0]);
+              }
+            }}
             onPointerDown={(e) => {
               handleViewportPointerDown(e);
               handleViewportBgPointerDown(e);
@@ -1427,8 +1551,8 @@ export const ImageEditView: React.FC = () => {
               handleGuideLinePointerUp(e);
             }}
             onWheel={handleWheelZoom}
-            className={`absolute inset-0 flex items-center justify-center overflow-hidden p-2 sm:p-4 select-none ${
-              activeTool === 'mosaic' ? 'cursor-crosshair' : zoomLevel > 1 ? 'cursor-grab active:cursor-grabbing' : ''
+            className={`absolute inset-0 flex items-center justify-center overflow-hidden p-2 sm:p-4 select-none touch-none ${
+              activeTool === 'mosaic' ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
             }`}
           >
             {/* Checkerboard transparency grid */}
@@ -1530,15 +1654,31 @@ export const ImageEditView: React.FC = () => {
                       left: `${leftPx}px`,
                       top: `${topPx}px`,
                       backgroundColor: item.hasBackground ? item.backgroundColor : 'transparent',
-                      borderRadius: item.hasBackground ? `${scaledRadius}px` : '0px',
-                      borderWidth: item.hasBackground && scaledBorderWidth > 0 ? `${scaledBorderWidth}px` : undefined,
-                      borderColor: item.hasBackground && scaledBorderWidth > 0 ? item.borderColor : undefined,
-                      borderStyle: item.hasBackground && scaledBorderWidth > 0 ? item.borderStyle : undefined,
-                      padding: item.hasBackground ? `${scaledPadY}px ${scaledPadX}px` : '0px',
+                      borderRadius: (item.hasBackground || item.borderWidth > 0) ? `${scaledRadius}px` : '0px',
+                      borderWidth: item.borderWidth > 0 ? `${scaledBorderWidth}px` : undefined,
+                      borderColor: item.borderWidth > 0 ? item.borderColor : undefined,
+                      borderStyle: item.borderWidth > 0 ? item.borderStyle : undefined,
+                      padding: (item.hasBackground || item.borderWidth > 0) ? `${scaledPadY}px ${scaledPadX}px` : '0px',
                       opacity: item.opacity
                     }}
                     title="더블클릭하여 텍스트 수정, 드래그하여 이동"
                   >
+                    {/* On-canvas direct delete button */}
+                    {isSelected && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          handleDeleteSelectedText();
+                        }}
+                        className="absolute -top-3 -right-3 w-5 h-5 rounded-full bg-rose-600 hover:bg-rose-500 text-white shadow-lg flex items-center justify-center cursor-pointer z-30 transition-transform hover:scale-110 border border-white/50"
+                        title="텍스트 삭제 (Del/Backspace)"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+
                     <div
                       style={{
                         fontFamily: item.fontFamily,
@@ -1609,52 +1749,15 @@ export const ImageEditView: React.FC = () => {
               )}
             </div>
 
-            {/* Floating Zoom Control Bar (Bottom-Center) */}
-            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 p-1.5 rounded-xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md text-xs select-none">
-              <button
-                onClick={() => setZoomLevel((prev) => Math.max(0.1, Number((prev - 0.1).toFixed(2))))}
-                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
-                title="축소 (Zoom Out)"
-              >
-                <ZoomOut className="w-3.5 h-3.5" />
-              </button>
-
-              <button
-                onClick={handleResetTo100}
-                className="px-2.5 py-1 rounded-lg font-mono font-bold text-sm text-indigo-300 hover:bg-slate-800 transition cursor-pointer"
-                title="100% 원본 픽셀 크기 (1:1 픽셀 매칭)"
-              >
-                {Math.round(zoomLevel * 100)}%
-              </button>
-
-              <button
-                onClick={() => setZoomLevel((prev) => Math.min(5.0, Number((prev + 0.1).toFixed(2))))}
-                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
-                title="확대 (Zoom In)"
-              >
-                <ZoomIn className="w-3.5 h-3.5" />
-              </button>
-
-              <div className="h-3 w-px bg-slate-700 mx-0.5" />
-
-              <button
-                onClick={handleFitToScreen}
-                className="px-2.5 py-1 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold transition cursor-pointer flex items-center gap-1.5"
-                title="화면 맞춤 (가용 화면에 꽉 채우기)"
-              >
-                <Maximize className="w-3 h-3 text-indigo-400" />
-                <span>화면 맞춤</span>
-              </button>
-            </div>
           </div>
 
           {/* ========================================================================= */}
-          {/* 2. FLOATING LEFT PALETTE (Overlaid on canvas)                             */}
+          {/* 2. FLOATING LEFT PALETTE & ZOOM CARD (Overlaid on canvas)                 */}
           {/* ========================================================================= */}
-          <div className="absolute left-3 top-3 bottom-3 z-30 pointer-events-none flex flex-col justify-start">
+          <div className="absolute left-3 top-3 bottom-3 z-30 pointer-events-none flex flex-col justify-start gap-2">
             <div className="pointer-events-auto">
               {isPaletteCollapsed ? (
-                <div className="w-12 shrink-0 p-1.5 rounded-2xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md flex flex-col items-center gap-1.5 max-h-[calc(100vh-145px)] overflow-y-auto">
+                <div className="w-12 shrink-0 p-1.5 rounded-2xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md flex flex-col items-center gap-1.5 max-h-[calc(100vh-230px)] overflow-y-auto">
                   <button
                     onClick={() => setIsPaletteCollapsed(false)}
                     className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer mb-1 border-b border-slate-800 w-full flex justify-center"
@@ -1685,7 +1788,7 @@ export const ImageEditView: React.FC = () => {
                   })}
                 </div>
               ) : (
-                <div className="w-48 shrink-0 p-2 rounded-2xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md space-y-2 max-h-[calc(100vh-145px)] overflow-y-auto">
+                <div className="w-48 shrink-0 p-2 rounded-2xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md space-y-2 max-h-[calc(100vh-230px)] overflow-y-auto">
                   <div className="text-xs font-bold text-slate-300 px-2 py-1 border-b border-slate-800/80 flex items-center justify-between">
                     <span>도구 팔레트</span>
                     <button
@@ -1730,6 +1833,77 @@ export const ImageEditView: React.FC = () => {
                       <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[11px] border border-slate-700">Ctrl+V</kbd> 새 이미지 교체
                     </div>
                   </div>
+                </div>
+              )}
+            </div>
+
+            {/* Image Zoom / Fit to Screen Card below tool palette */}
+            <div className="pointer-events-auto">
+              {isPaletteCollapsed ? (
+                <div className="w-12 shrink-0 p-1.5 rounded-2xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md flex flex-col items-center gap-1 select-none">
+                  <button
+                    onClick={() => setZoomLevel((prev) => Math.min(5.0, Number((prev + 0.1).toFixed(2))))}
+                    className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
+                    title="확대 (Zoom In)"
+                  >
+                    <ZoomIn className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={handleResetTo100}
+                    className="py-0.5 text-[10px] font-mono font-bold text-indigo-300 hover:bg-slate-800 rounded w-full text-center transition cursor-pointer"
+                    title="100% 원본 픽셀 크기 (1:1 픽셀 매칭)"
+                  >
+                    {Math.round(zoomLevel * 100)}%
+                  </button>
+                  <button
+                    onClick={() => setZoomLevel((prev) => Math.max(0.1, Number((prev - 0.1).toFixed(2))))}
+                    className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
+                    title="축소 (Zoom Out)"
+                  >
+                    <ZoomOut className="w-3.5 h-3.5" />
+                  </button>
+                  <div className="w-6 h-px bg-slate-800 my-0.5" />
+                  <button
+                    onClick={handleFitToScreen}
+                    className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
+                    title="화면 맞춤 (가용 화면에 꽉 채우기)"
+                  >
+                    <Maximize className="w-3.5 h-3.5 text-indigo-400" />
+                  </button>
+                </div>
+              ) : (
+                <div className="w-48 shrink-0 p-2 rounded-2xl bg-slate-900/90 border border-slate-700/80 shadow-2xl backdrop-blur-md space-y-1.5 select-none">
+                  <div className="flex items-center justify-between bg-slate-950/70 p-1 rounded-xl border border-slate-800/80">
+                    <button
+                      onClick={() => setZoomLevel((prev) => Math.max(0.1, Number((prev - 0.1).toFixed(2))))}
+                      className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
+                      title="축소 (Zoom Out)"
+                    >
+                      <ZoomOut className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={handleResetTo100}
+                      className="px-2 py-0.5 rounded font-mono font-bold text-xs text-indigo-300 hover:bg-slate-800 transition cursor-pointer"
+                      title="100% 원본 픽셀 크기 (1:1 픽셀 매칭)"
+                    >
+                      {Math.round(zoomLevel * 100)}%
+                    </button>
+                    <button
+                      onClick={() => setZoomLevel((prev) => Math.min(5.0, Number((prev + 0.1).toFixed(2))))}
+                      className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
+                      title="확대 (Zoom In)"
+                    >
+                      <ZoomIn className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <button
+                    onClick={handleFitToScreen}
+                    className="w-full py-1.5 px-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-200 hover:text-white text-xs font-semibold border border-slate-700 transition cursor-pointer flex items-center justify-center gap-1.5"
+                    title="화면 맞춤 (가용 화면에 꽉 채우기)"
+                  >
+                    <Maximize className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>화면 맞춤</span>
+                  </button>
                 </div>
               )}
             </div>
@@ -2183,17 +2357,24 @@ export const ImageEditView: React.FC = () => {
                 <div className="space-y-3 text-xs">
                   {/* 1. Quick Presets */}
                   <div className="space-y-1.5">
-                    <span className="text-slate-400 text-[10px] font-semibold">원클릭 프리셋</span>
+                    <span className="text-slate-400 text-[10px] font-semibold">원클릭 프리셋 (클릭하여 선택)</span>
                     <div className="grid grid-cols-2 gap-1.5">
                       <button
+                        type="button"
                         onClick={() => {
+                          setSelectedBgPreset('white');
                           setBgColorTarget('#ffffff');
                           setBgColorTolerance(18);
                           setBgColorSmoothness(6);
                           setBgColorContiguous(true);
                           setBgColorReplaceMode('transparent');
+                          setIsBgColorModified(true);
                         }}
-                        className="py-1.5 px-2 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 hover:text-white border border-indigo-500/40 font-bold text-[11px] transition text-left cursor-pointer truncate flex items-center gap-1.5"
+                        className={`py-1.5 px-2 rounded-lg border text-[11px] transition text-left cursor-pointer truncate flex items-center gap-1.5 ${
+                          selectedBgPreset === 'white'
+                            ? 'bg-indigo-600/30 text-white border-indigo-400 font-bold shadow-sm shadow-indigo-500/20'
+                            : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-slate-700 font-medium'
+                        }`}
                         title="외곽 흰색 배경을 깨끗하게 투명화 (내부 보존)"
                       >
                         <Eraser className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
@@ -2201,14 +2382,21 @@ export const ImageEditView: React.FC = () => {
                       </button>
 
                       <button
+                        type="button"
                         onClick={() => {
+                          setSelectedBgPreset('black');
                           setBgColorTarget('#000000');
                           setBgColorTolerance(18);
                           setBgColorSmoothness(6);
                           setBgColorContiguous(true);
                           setBgColorReplaceMode('transparent');
+                          setIsBgColorModified(true);
                         }}
-                        className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 font-medium text-[11px] transition text-left cursor-pointer truncate flex items-center gap-1.5"
+                        className={`py-1.5 px-2 rounded-lg border text-[11px] transition text-left cursor-pointer truncate flex items-center gap-1.5 ${
+                          selectedBgPreset === 'black'
+                            ? 'bg-indigo-600/30 text-white border-indigo-400 font-bold shadow-sm shadow-indigo-500/20'
+                            : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-slate-700 font-medium'
+                        }`}
                         title="외곽 검은색 배경을 투명화"
                       >
                         <span className="w-3 h-3 rounded-full bg-black border border-slate-600 shrink-0" />
@@ -2216,28 +2404,42 @@ export const ImageEditView: React.FC = () => {
                       </button>
 
                       <button
+                        type="button"
                         onClick={() => {
+                          setSelectedBgPreset('all-white');
                           setBgColorTarget('#ffffff');
                           setBgColorTolerance(25);
                           setBgColorSmoothness(6);
                           setBgColorContiguous(false);
                           setBgColorReplaceMode('transparent');
+                          setIsBgColorModified(true);
                         }}
-                        className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 font-medium text-[11px] transition text-left cursor-pointer truncate"
+                        className={`py-1.5 px-2 rounded-lg border text-[11px] transition text-left cursor-pointer truncate ${
+                          selectedBgPreset === 'all-white'
+                            ? 'bg-indigo-600/30 text-white border-indigo-400 font-bold shadow-sm shadow-indigo-500/20'
+                            : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-slate-700 font-medium'
+                        }`}
                         title="이미지 내 모든 흰색을 투명화"
                       >
                         밝은 배경 전체 제거
                       </button>
 
                       <button
+                        type="button"
                         onClick={() => {
+                          setSelectedBgPreset('chroma');
                           setBgColorTarget('#00ff00');
                           setBgColorTolerance(35);
                           setBgColorSmoothness(8);
                           setBgColorContiguous(true);
                           setBgColorReplaceMode('transparent');
+                          setIsBgColorModified(true);
                         }}
-                        className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 hover:text-white border border-slate-700 font-medium text-[11px] transition text-left cursor-pointer truncate"
+                        className={`py-1.5 px-2 rounded-lg border text-[11px] transition text-left cursor-pointer truncate ${
+                          selectedBgPreset === 'chroma'
+                            ? 'bg-indigo-600/30 text-emerald-300 border-indigo-400 font-bold shadow-sm shadow-indigo-500/20'
+                            : 'bg-slate-800 hover:bg-slate-700 text-emerald-400 hover:text-emerald-300 border-slate-700 font-medium'
+                        }`}
                         title="녹색 크로마키 배경 투명화"
                       >
                         크로마키 (녹색)
@@ -2250,9 +2452,13 @@ export const ImageEditView: React.FC = () => {
                     <span className="text-slate-400 text-[10px] font-semibold">동작 모드</span>
                     <div className="grid grid-cols-2 gap-1.5">
                       <button
-                        onClick={() => setBgColorReplaceMode('transparent')}
+                        type="button"
+                        onClick={() => {
+                          setBgColorReplaceMode('transparent');
+                          setIsBgColorModified(true);
+                        }}
                         className={`py-1.5 px-2 rounded-lg border text-xs font-semibold cursor-pointer transition flex items-center justify-center gap-1.5 ${
-                          bgColorReplaceMode === 'transparent'
+                          isBgColorModified && bgColorReplaceMode === 'transparent'
                             ? 'border-indigo-400 bg-indigo-600/30 text-white shadow'
                             : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-white'
                         }`}
@@ -2262,9 +2468,13 @@ export const ImageEditView: React.FC = () => {
                       </button>
 
                       <button
-                        onClick={() => setBgColorReplaceMode('replace')}
+                        type="button"
+                        onClick={() => {
+                          setBgColorReplaceMode('replace');
+                          setIsBgColorModified(true);
+                        }}
                         className={`py-1.5 px-2 rounded-lg border text-xs font-semibold cursor-pointer transition flex items-center justify-center gap-1.5 ${
-                          bgColorReplaceMode === 'replace'
+                          isBgColorModified && bgColorReplaceMode === 'replace'
                             ? 'border-indigo-400 bg-indigo-600/30 text-white shadow'
                             : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-white'
                         }`}
@@ -2281,7 +2491,11 @@ export const ImageEditView: React.FC = () => {
                       <div className="flex items-center gap-1.5">
                         <button
                           type="button"
-                          onClick={() => pickColorFromEyeDropper(setBgColorTarget)}
+                          onClick={() => pickColorFromEyeDropper((hex) => {
+                            setBgColorTarget(hex);
+                            setSelectedBgPreset(null);
+                            setIsBgColorModified(true);
+                          })}
                           title="화면에서 색상 추출 (스포이트)"
                           className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-indigo-400 transition cursor-pointer"
                         >
@@ -2290,13 +2504,21 @@ export const ImageEditView: React.FC = () => {
                         <input
                           type="color"
                           value={bgColorTarget}
-                          onChange={(e) => setBgColorTarget(e.target.value)}
+                          onChange={(e) => {
+                            setBgColorTarget(e.target.value);
+                            setSelectedBgPreset(null);
+                            setIsBgColorModified(true);
+                          }}
                           className="w-6 h-6 rounded border border-slate-700 bg-slate-950 cursor-pointer"
                         />
                         <input
                           type="text"
                           value={bgColorTarget}
-                          onChange={(e) => setBgColorTarget(e.target.value)}
+                          onChange={(e) => {
+                            setBgColorTarget(e.target.value);
+                            setSelectedBgPreset(null);
+                            setIsBgColorModified(true);
+                          }}
                           className="w-16 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-center text-white font-mono text-xs focus:outline-none"
                         />
                       </div>
@@ -2314,9 +2536,14 @@ export const ImageEditView: React.FC = () => {
                       ].map((chip) => (
                         <button
                           key={chip.color}
-                          onClick={() => setBgColorTarget(chip.color)}
+                          type="button"
+                          onClick={() => {
+                            setBgColorTarget(chip.color);
+                            setSelectedBgPreset(null);
+                            setIsBgColorModified(true);
+                          }}
                           className={`w-5 h-5 rounded-md border transition cursor-pointer ${
-                            bgColorTarget.toLowerCase() === chip.color.toLowerCase()
+                            isBgColorModified && bgColorTarget.toLowerCase() === chip.color.toLowerCase()
                               ? 'border-indigo-400 scale-110 shadow-sm shadow-indigo-500'
                               : 'border-slate-700 hover:border-slate-500'
                           }`}
@@ -2331,24 +2558,33 @@ export const ImageEditView: React.FC = () => {
                       <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-[11px]">
                         <span className="text-slate-300 font-medium">새로 채울 배경색:</span>
                         <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => pickColorFromEyeDropper(setBgColorNewColor)}
-                          title="화면에서 색상 추출 (스포이트)"
-                          className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-indigo-400 transition cursor-pointer"
-                        >
-                          <Pipette className="w-3.5 h-3.5" />
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => pickColorFromEyeDropper((hex) => {
+                              setBgColorNewColor(hex);
+                              setIsBgColorModified(true);
+                            })}
+                            title="화면에서 색상 추출 (스포이트)"
+                            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-indigo-400 transition cursor-pointer"
+                          >
+                            <Pipette className="w-3.5 h-3.5" />
+                          </button>
                           <input
                             type="color"
                             value={bgColorNewColor}
-                            onChange={(e) => setBgColorNewColor(e.target.value)}
+                            onChange={(e) => {
+                              setBgColorNewColor(e.target.value);
+                              setIsBgColorModified(true);
+                            }}
                             className="w-6 h-6 rounded border border-slate-700 bg-slate-950 cursor-pointer"
                           />
                           <input
                             type="text"
                             value={bgColorNewColor}
-                            onChange={(e) => setBgColorNewColor(e.target.value)}
+                            onChange={(e) => {
+                              setBgColorNewColor(e.target.value);
+                              setIsBgColorModified(true);
+                            }}
                             className="w-16 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-center text-white font-mono text-xs focus:outline-none"
                           />
                         </div>
@@ -2356,91 +2592,102 @@ export const ImageEditView: React.FC = () => {
                     )}
                   </div>
 
-                  {/* 4. 적용 범위 (외곽 연결 배경 vs 전체) */}
+                  {/* 4. 감지 영역 방식 (연결된 외곽 vs 이미지 전체) */}
                   <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-1.5">
-                    <span className="text-[11px] font-bold text-slate-300">적용 범위</span>
-                    <div className="space-y-1 text-[11px]">
-                      <label className="flex items-start gap-2 text-slate-300 cursor-pointer select-none">
+                    <span className="text-slate-400 text-[10px] font-semibold">제거 범위</span>
+                    <div className="space-y-1 text-slate-300">
+                      <label className="flex items-center gap-2 cursor-pointer">
                         <input
                           type="radio"
-                          name="bgColorContiguous"
+                          name="bgContiguous"
                           checked={!bgColorContiguous}
-                          onChange={() => setBgColorContiguous(false)}
-                          className="accent-indigo-500 mt-0.5"
+                          onChange={() => {
+                            setBgColorContiguous(false);
+                            setIsBgColorModified(true);
+                          }}
+                          className="accent-indigo-500"
                         />
-                        <div>
-                          <span className="font-semibold text-white">전체 영역 동일 색상 제거</span>
-                          <p className="text-[10px] text-slate-400">이미지 전체에서 일치하는 모든 색상을 투명화합니다</p>
-                        </div>
+                        <span>이미지 전체에서 동일 색상 모두 제거</span>
                       </label>
-                      <label className="flex items-start gap-2 text-slate-300 cursor-pointer select-none pt-1 border-t border-slate-800/60">
+                      <label className="flex items-center gap-2 cursor-pointer">
                         <input
                           type="radio"
-                          name="bgColorContiguous"
+                          name="bgContiguous"
                           checked={bgColorContiguous}
-                          onChange={() => setBgColorContiguous(true)}
-                          className="accent-indigo-500 mt-0.5"
+                          onChange={() => {
+                            setBgColorContiguous(true);
+                            setIsBgColorModified(true);
+                          }}
+                          className="accent-indigo-500"
                         />
-                        <div>
-                          <span className="font-semibold text-white">외곽 연결 배경만</span>
-                          <p className="text-[10px] text-slate-400">인물이나 물체 안쪽의 흰색(눈, 치아, 옷 등)을 안전하게 보존합니다</p>
-                        </div>
+                        <span>외곽 테두리에서 연결된 배경만 제거 (내부 보존)</span>
                       </label>
                     </div>
                   </div>
 
                   {/* 5. 허용 오차 (Tolerance) */}
                   <div className="space-y-1">
-                    <div className="flex justify-between text-[10px]">
-                      <span className="text-slate-400">허용 오차 (Tolerance)</span>
-                      <span className="font-mono text-indigo-400">{bgColorTolerance}%</span>
+                    <div className="flex justify-between text-[11px] text-slate-400">
+                      <span>색상 허용 오차 (Tolerance)</span>
+                      <span className="font-mono text-indigo-400 font-bold">{bgColorTolerance}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <input
                         type="range"
                         min="0"
-                        max="80"
+                        max="100"
                         value={bgColorTolerance}
-                        onChange={(e) => setBgColorTolerance(parseInt(e.target.value, 10) || 0)}
+                        onChange={(e) => {
+                          setBgColorTolerance(parseInt(e.target.value, 10) || 0);
+                          setIsBgColorModified(true);
+                        }}
                         className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
                       />
-                      <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5">
+                      <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1">
                         <input
                           type="number"
                           min="0"
                           max="100"
                           value={bgColorTolerance}
-                          onChange={(e) => setBgColorTolerance(Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)))}
-                          className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                          onChange={(e) => {
+                            setBgColorTolerance(Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)));
+                            setIsBgColorModified(true);
+                          }}
+                          className="w-full bg-transparent text-center text-white font-mono text-xs focus:outline-none"
                         />
-                        <span className="text-[10px] text-slate-400">%</span>
                       </div>
                     </div>
                   </div>
 
-                  {/* 6. 가장자리 부드럽게 (Smoothness / Feathering) */}
+                  {/* 6. 가장자리 부드러움 (Smoothness) */}
                   <div className="space-y-1">
-                    <div className="flex justify-between text-[10px]">
-                      <span className="text-slate-400">가장자리 부드럽게 (Feather)</span>
-                      <span className="font-mono text-indigo-400">{bgColorSmoothness} px</span>
+                    <div className="flex justify-between text-[11px] text-slate-400">
+                      <span>가장자리 부드러움 (Feather)</span>
+                      <span className="font-mono text-indigo-400 font-bold">{bgColorSmoothness}px</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <input
                         type="range"
                         min="0"
-                        max="25"
+                        max="30"
                         value={bgColorSmoothness}
-                        onChange={(e) => setBgColorSmoothness(parseInt(e.target.value, 10) || 0)}
+                        onChange={(e) => {
+                          setBgColorSmoothness(parseInt(e.target.value, 10) || 0);
+                          setIsBgColorModified(true);
+                        }}
                         className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
                       />
-                      <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5">
+                      <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1">
                         <input
                           type="number"
                           min="0"
                           max="30"
                           value={bgColorSmoothness}
-                          onChange={(e) => setBgColorSmoothness(Math.max(0, Math.min(30, parseInt(e.target.value, 10) || 0)))}
-                          className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                          onChange={(e) => {
+                            setBgColorSmoothness(Math.max(0, Math.min(30, parseInt(e.target.value, 10) || 0)));
+                            setIsBgColorModified(true);
+                          }}
+                          className="w-full bg-transparent text-center text-white font-mono text-xs focus:outline-none"
                         />
                         <span className="text-[10px] text-slate-400">px</span>
                       </div>
@@ -2450,12 +2697,15 @@ export const ImageEditView: React.FC = () => {
                   {/* 7. Action Buttons */}
                   <div className="space-y-1.5 pt-1">
                     <button
+                      type="button"
                       onClick={() => {
                         setBgColorTarget('#ffffff');
                         setBgColorTolerance(18);
                         setBgColorSmoothness(6);
                         setBgColorContiguous(true);
                         setBgColorReplaceMode('transparent');
+                        setIsBgColorModified(false);
+                        setSelectedBgPreset(null);
                       }}
                       className="w-full py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs border border-slate-700 transition cursor-pointer flex items-center justify-center gap-1.5"
                     >
@@ -3022,14 +3272,50 @@ export const ImageEditView: React.FC = () => {
               {/* ---------------- Tool 8: 텍스트 (객체 기반 텍스트 시스템) ---------------- */}
               {activeTool === 'text' && (
                 <div className="space-y-3.5 text-xs">
-                  {/* [+ 텍스트 추가] 버튼 */}
-                  <button
-                    onClick={handleAddTextItem}
-                    className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-bold text-xs shadow-md shadow-indigo-600/30 transition cursor-pointer flex items-center justify-center gap-1.5"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>텍스트 추가</span>
-                  </button>
+                  {/* [+ 텍스트 추가] [ 배경 ] [ 테두리 ] 3버튼 그룹 (아이콘 없이 텍스트 버튼만) */}
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleAddTextItem}
+                      className="flex-1 py-2 px-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-bold text-xs shadow-md shadow-indigo-600/30 transition cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>텍스트 추가</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !hasTextBg;
+                        setHasTextBg(next);
+                        updateSelectedTextProperty({ hasBackground: next });
+                      }}
+                      className={`py-2 px-3 rounded-xl border text-xs font-semibold transition cursor-pointer shrink-0 ${
+                        hasTextBg
+                          ? 'bg-indigo-600 text-white border-indigo-400 font-bold shadow-sm shadow-indigo-500/20'
+                          : 'bg-slate-800 text-slate-400 hover:text-white border-slate-700'
+                      }`}
+                      title={hasTextBg ? '배경 박스 켜짐' : '배경 박스 꺼짐'}
+                    >
+                      배경
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const isCurrentlyOn = textBorderWidth > 0;
+                        const nextVal = isCurrentlyOn ? 0 : 2;
+                        setTextBorderWidth(nextVal);
+                        updateSelectedTextProperty({ borderWidth: nextVal });
+                      }}
+                      className={`py-2 px-3 rounded-xl border text-xs font-semibold transition cursor-pointer shrink-0 ${
+                        textBorderWidth > 0
+                          ? 'bg-indigo-600 text-white border-indigo-400 font-bold shadow-sm shadow-indigo-500/20'
+                          : 'bg-slate-800 text-slate-400 hover:text-white border-slate-700'
+                      }`}
+                      title={textBorderWidth > 0 ? '테두리 선 켜짐' : '테두리 선 꺼짐'}
+                    >
+                      테두리
+                    </button>
+                  </div>
 
                   {/* 텍스트 객체 목록 */}
                   {textItems.length > 0 ? (
@@ -3214,188 +3500,178 @@ export const ImageEditView: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* 배경 색상 + 체크박스 토글 + 스포이트 */}
-                      <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/80">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-slate-300 font-medium">배경 색상</span>
-                          <input
-                            type="checkbox"
-                            checked={hasTextBg}
-                            onChange={(e) => {
-                              setHasTextBg(e.target.checked);
-                              updateSelectedTextProperty({ hasBackground: e.target.checked });
-                            }}
-                            className="accent-indigo-500 rounded cursor-pointer"
-                          />
-                        </div>
-                        {hasTextBg && (
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => pickColorFromEyeDropper((col) => {
-                                setTextBgColor(col);
-                                updateSelectedTextProperty({ backgroundColor: col });
-                              })}
-                              title="스포이트로 색상 추출"
-                              className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-indigo-400 transition cursor-pointer"
-                            >
-                              <Pipette className="w-3.5 h-3.5" />
-                            </button>
-                            <input
-                              type="color"
-                              value={textBgColor}
-                              onChange={(e) => {
-                                setTextBgColor(e.target.value);
-                                updateSelectedTextProperty({ backgroundColor: e.target.value });
-                              }}
-                              className="w-6 h-6 rounded border border-slate-700 bg-slate-900 cursor-pointer"
-                            />
-                            <input
-                              type="text"
-                              value={textBgColor}
-                              onChange={(e) => {
-                                setTextBgColor(e.target.value);
-                                updateSelectedTextProperty({ backgroundColor: e.target.value });
-                              }}
-                              className="w-16 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-center text-white font-mono text-xs focus:outline-none"
-                            />
-                          </div>
-                        )}
-                      </div>
-
-                      {/* 테두리 색상 (배경 색상 항목 아래에 기본으로 노출!) + 스포이트 */}
-                      <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/80">
-                        <span className="text-slate-300 font-medium">테두리 색상</span>
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => pickColorFromEyeDropper((col) => {
-                              setTextBorderColor(col);
-                              updateSelectedTextProperty({ borderColor: col });
-                            })}
-                            title="스포이트로 색상 추출"
-                            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-indigo-400 transition cursor-pointer"
-                          >
-                            <Pipette className="w-3.5 h-3.5" />
-                          </button>
-                          <input
-                            type="color"
-                            value={textBorderColor}
-                            onChange={(e) => {
-                              setTextBorderColor(e.target.value);
-                              updateSelectedTextProperty({ borderColor: e.target.value });
-                            }}
-                            className="w-6 h-6 rounded border border-slate-700 bg-slate-900 cursor-pointer"
-                          />
-                          <input
-                            type="text"
-                            value={textBorderColor}
-                            onChange={(e) => {
-                              setTextBorderColor(e.target.value);
-                              updateSelectedTextProperty({ borderColor: e.target.value });
-                            }}
-                            className="w-16 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-center text-white font-mono text-xs focus:outline-none"
-                          />
-                        </div>
-                      </div>
-
-                      {/* 테두리 스타일: 실선, 점선, 둥근 점선(원형점) 선택 */}
-                      <div className="space-y-1">
-                        <span className="text-slate-400 text-[10px]">테두리 선 모양</span>
-                        <div className="grid grid-cols-3 gap-1">
-                          {[
-                            { id: 'solid', label: '실선' },
-                            { id: 'dashed', label: '점선' },
-                            { id: 'dotted', label: '둥근 점' },
-                          ].map((style) => (
-                            <button
-                              key={style.id}
-                              type="button"
-                              onClick={() => {
-                                const val = style.id as 'solid' | 'dashed' | 'dotted';
-                                setTextBorderStyle(val);
-                                updateSelectedTextProperty({ borderStyle: val });
-                              }}
-                              className={`py-1 rounded-lg border text-xs font-semibold cursor-pointer transition text-center ${
-                                textBorderStyle === style.id
-                                  ? 'border-indigo-400 bg-indigo-600/30 text-white shadow-sm'
-                                  : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white'
-                              }`}
-                            >
-                              {style.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* 테두리 두께 (px) */}
-                      <div className="space-y-1">
-                        <span className="text-slate-400 text-[10px]">테두리 두께 (px)</span>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="range"
-                            min="0"
-                            max="20"
-                            value={textBorderWidth}
-                            onChange={(e) => {
-                              const val = parseInt(e.target.value, 10) || 0;
-                              setTextBorderWidth(val);
-                              updateSelectedTextProperty({ borderWidth: val });
-                            }}
-                            className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
-                          />
-                          <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-900 border border-slate-700 rounded-lg px-2 py-0.5">
-                            <input
-                              type="number"
-                              min="0"
-                              max="40"
-                              value={textBorderWidth}
-                              onChange={(e) => {
-                                const val = Math.max(0, parseInt(e.target.value, 10) || 0);
-                                setTextBorderWidth(val);
-                                updateSelectedTextProperty({ borderWidth: val });
-                              }}
-                              className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
-                            />
-                            <span className="text-[10px] text-slate-400">px</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 모서리 둥글게 (px) */}
+                      {/* 배경 설정 (체크박스 없이 상단 [배경] 버튼으로 연동) */}
                       {hasTextBg && (
-                        <div className="space-y-1">
-                          <span className="text-slate-400 text-[10px]">배경 모서리 둥글게 (px)</span>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="range"
-                              min="0"
-                              max="60"
-                              value={textBorderRadius}
-                              onChange={(e) => {
-                                const val = parseInt(e.target.value, 10) || 0;
-                                setTextBorderRadius(val);
-                                updateSelectedTextProperty({ backgroundRadius: val });
-                              }}
-                              className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
-                            />
-                            <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-900 border border-slate-700 rounded-lg px-2 py-0.5">
+                        <>
+                          <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/80">
+                            <span className="text-slate-300 font-medium">배경 색상</span>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => pickColorFromEyeDropper((col) => {
+                                  setTextBgColor(col);
+                                  updateSelectedTextProperty({ backgroundColor: col });
+                                })}
+                                title="스포이트로 색상 추출"
+                                className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-indigo-400 transition cursor-pointer"
+                              >
+                                <Pipette className="w-3.5 h-3.5" />
+                              </button>
                               <input
-                                type="number"
+                                type="color"
+                                value={textBgColor}
+                                onChange={(e) => {
+                                  setTextBgColor(e.target.value);
+                                  updateSelectedTextProperty({ backgroundColor: e.target.value });
+                                }}
+                                className="w-6 h-6 rounded border border-slate-700 bg-slate-900 cursor-pointer"
+                              />
+                              <input
+                                type="text"
+                                value={textBgColor}
+                                onChange={(e) => {
+                                  setTextBgColor(e.target.value);
+                                  updateSelectedTextProperty({ backgroundColor: e.target.value });
+                                }}
+                                className="w-16 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-center text-white font-mono text-xs focus:outline-none"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <span className="text-slate-400 text-[10px]">모서리 둥글게 (px)</span>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="range"
                                 min="0"
-                                max="100"
+                                max="60"
                                 value={textBorderRadius}
                                 onChange={(e) => {
-                                  const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                                  const val = parseInt(e.target.value, 10) || 0;
                                   setTextBorderRadius(val);
                                   updateSelectedTextProperty({ backgroundRadius: val });
                                 }}
-                                className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                                className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
                               />
-                              <span className="text-[10px] text-slate-400">px</span>
+                              <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-900 border border-slate-700 rounded-lg px-2 py-0.5">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  value={textBorderRadius}
+                                  onChange={(e) => {
+                                    const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                                    setTextBorderRadius(val);
+                                    updateSelectedTextProperty({ backgroundRadius: val });
+                                  }}
+                                  className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                                />
+                                <span className="text-[10px] text-slate-400">px</span>
+                              </div>
                             </div>
                           </div>
-                        </div>
+                        </>
+                      )}
+
+                      {/* 테두리 설정 (상단 [테두리] 버튼으로 연동) */}
+                      {textBorderWidth > 0 && (
+                        <>
+                          <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/80">
+                            <span className="text-slate-300 font-medium">테두리 색상</span>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => pickColorFromEyeDropper((col) => {
+                                  setTextBorderColor(col);
+                                  updateSelectedTextProperty({ borderColor: col });
+                                })}
+                                title="스포이트로 색상 추출"
+                                className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-indigo-400 transition cursor-pointer"
+                              >
+                                <Pipette className="w-3.5 h-3.5" />
+                              </button>
+                              <input
+                                type="color"
+                                value={textBorderColor}
+                                onChange={(e) => {
+                                  setTextBorderColor(e.target.value);
+                                  updateSelectedTextProperty({ borderColor: e.target.value });
+                                }}
+                                className="w-6 h-6 rounded border border-slate-700 bg-slate-900 cursor-pointer"
+                              />
+                              <input
+                                type="text"
+                                value={textBorderColor}
+                                onChange={(e) => {
+                                  setTextBorderColor(e.target.value);
+                                  updateSelectedTextProperty({ borderColor: e.target.value });
+                                }}
+                                className="w-16 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-center text-white font-mono text-xs focus:outline-none"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <span className="text-slate-400 text-[10px]">테두리 선 모양</span>
+                            <div className="grid grid-cols-3 gap-1">
+                              {[
+                                { id: 'solid', label: '실선' },
+                                { id: 'dashed', label: '점선' },
+                                { id: 'dotted', label: '둥근 점' },
+                              ].map((style) => (
+                                <button
+                                  key={style.id}
+                                  type="button"
+                                  onClick={() => {
+                                    const val = style.id as 'solid' | 'dashed' | 'dotted';
+                                    setTextBorderStyle(val);
+                                    updateSelectedTextProperty({ borderStyle: val });
+                                  }}
+                                  className={`py-1 rounded-lg border text-xs font-semibold cursor-pointer transition text-center ${
+                                    textBorderStyle === style.id
+                                      ? 'border-indigo-400 bg-indigo-600/30 text-white shadow-sm'
+                                      : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white'
+                                  }`}
+                                >
+                                  {style.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <span className="text-slate-400 text-[10px]">테두리 두께 (px)</span>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="range"
+                                min="1"
+                                max="20"
+                                value={textBorderWidth}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value, 10) || 1;
+                                  setTextBorderWidth(val);
+                                  updateSelectedTextProperty({ borderWidth: val });
+                                }}
+                                className="flex-1 h-1.5 bg-slate-800 rounded accent-indigo-500 cursor-pointer"
+                              />
+                              <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-900 border border-slate-700 rounded-lg px-2 py-0.5">
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max="40"
+                                  value={textBorderWidth}
+                                  onChange={(e) => {
+                                    const val = Math.max(1, parseInt(e.target.value, 10) || 1);
+                                    setTextBorderWidth(val);
+                                    updateSelectedTextProperty({ borderWidth: val });
+                                  }}
+                                  className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                                />
+                                <span className="text-[10px] text-slate-400">px</span>
+                              </div>
+                            </div>
+                          </div>
+                        </>
                       )}
 
                       {/* 삭제 버튼 */}

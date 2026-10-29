@@ -509,7 +509,7 @@ export function applyTextWatermark(
       break;
   }
 
-  if (opts.hasBackground) {
+  if (opts.hasBackground || (opts.borderWidth && opts.borderWidth > 0)) {
     const bgX = x - 10;
     const bgY = y - textH - 4;
     const bgW = textW + 20;
@@ -523,7 +523,7 @@ export function applyTextWatermark(
       ctx.rect(bgX, bgY, bgW, bgH);
     }
 
-    if (opts.backgroundColor && opts.backgroundColor !== 'transparent') {
+    if (opts.hasBackground && opts.backgroundColor && opts.backgroundColor !== 'transparent') {
       ctx.fillStyle = opts.backgroundColor;
       ctx.fill();
     }
