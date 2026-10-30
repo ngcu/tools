@@ -473,54 +473,58 @@ export function applyTextWatermark(
   ctx.save();
   ctx.globalAlpha = Math.max(0.05, Math.min(1.0, opts.opacity));
   ctx.font = `bold ${opts.fontSize}px ${opts.fontFamily || 'sans-serif'}`;
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
 
   const metrics = ctx.measureText(opts.text);
   const textW = metrics.width;
   const textH = opts.fontSize;
+  const lineH = opts.fontSize * 1.2;
+  const hasDecor = Boolean(opts.hasBackground || (opts.borderWidth && opts.borderWidth > 0));
+  const padX = hasDecor ? 8 : 0;
+  const padY = hasDecor ? 4 : 0;
+  const boxW = textW + padX * 2;
+  const boxH = lineH + padY * 2;
   const pad = 20;
 
-  let x = pad;
-  let y = textH + pad;
+  let boxX = pad;
+  let boxY = pad;
 
   switch (opts.position) {
     case 'center':
-      x = (canvas.width - textW) / 2;
-      y = (canvas.height + textH * 0.7) / 2;
+      boxX = (canvas.width - boxW) / 2;
+      boxY = (canvas.height - boxH) / 2;
       break;
     case 'top-left':
-      x = pad;
-      y = textH + pad;
+      boxX = pad;
+      boxY = pad;
       break;
     case 'top-right':
-      x = canvas.width - textW - pad;
-      y = textH + pad;
+      boxX = canvas.width - boxW - pad;
+      boxY = pad;
       break;
     case 'bottom-left':
-      x = pad;
-      y = canvas.height - pad;
+      boxX = pad;
+      boxY = canvas.height - boxH - pad;
       break;
     case 'bottom-right':
-      x = canvas.width - textW - pad;
-      y = canvas.height - pad;
+      boxX = canvas.width - boxW - pad;
+      boxY = canvas.height - boxH - pad;
       break;
     case 'custom':
-      x = opts.customX ?? pad;
-      y = opts.customY ?? textH + pad;
+      boxX = opts.customX ?? pad;
+      boxY = opts.customY ?? pad;
       break;
   }
 
-  if (opts.hasBackground || (opts.borderWidth && opts.borderWidth > 0)) {
-    const bgX = x - 10;
-    const bgY = y - textH - 4;
-    const bgW = textW + 20;
-    const bgH = textH + 12;
-    const rad = Math.min(opts.backgroundRadius || 0, Math.min(bgW, bgH) / 2);
+  if (hasDecor) {
+    const rad = Math.min(opts.backgroundRadius || 0, Math.min(boxW, boxH) / 2);
 
     ctx.beginPath();
     if (typeof (ctx as any).roundRect === 'function') {
-      (ctx as any).roundRect(bgX, bgY, bgW, bgH, rad);
+      (ctx as any).roundRect(boxX, boxY, boxW, boxH, rad);
     } else {
-      ctx.rect(bgX, bgY, bgW, bgH);
+      ctx.rect(boxX, boxY, boxW, boxH);
     }
 
     if (opts.hasBackground && opts.backgroundColor && opts.backgroundColor !== 'transparent') {
@@ -545,8 +549,10 @@ export function applyTextWatermark(
     }
   }
 
+  const textX = boxX + padX;
+  const textY = boxY + padY + (lineH - textH) / 2;
   ctx.fillStyle = opts.color || '#ffffff';
-  ctx.fillText(opts.text, x, y);
+  ctx.fillText(opts.text, textX, textY);
   ctx.restore();
 
   return resCanvas;

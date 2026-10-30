@@ -29,7 +29,15 @@ import {
   Activity,
   Eraser,
   Pipette,
-  Plus
+  Plus,
+  ArrowUp,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUpLeft,
+  ArrowUpRight,
+  ArrowDownLeft,
+  ArrowDownRight
 } from 'lucide-react';
 import {
   CropRect,
@@ -66,34 +74,76 @@ type ActiveTool =
 
 const SYSTEM_FONTS = [
   {
-    category: '고딕계열 (Sans-serif)',
+    category: '고딕계열',
     fonts: [
-      { name: 'Noto Sans KR (구글 본고딕)', value: '"Noto Sans KR", "Malgun Gothic", sans-serif' },
-      { name: '맑은 고딕 (기본)', value: '"Malgun Gothic", "맑은 고딕", sans-serif' },
-      { name: 'Pretendard / 시스템', value: 'system-ui, -apple-system, sans-serif' },
+      { name: 'Noto Sans KR', value: '"Noto Sans KR", "Malgun Gothic", sans-serif' },
+      { name: '맑은 고딕', value: '"Malgun Gothic", "맑은 고딕", sans-serif' },
+      { name: 'Pretendard', value: 'system-ui, -apple-system, sans-serif' },
       { name: 'Apple SD 산돌고딕 Neo', value: '"Apple SD Gothic Neo", "Apple SD 산돌고딕 Neo", sans-serif' },
       { name: '나눔고딕', value: '"Nanum Gothic", "나눔고딕", sans-serif' },
-      { name: 'Arial (영문 기본)', value: 'Arial, sans-serif' },
-      { name: 'Impact (볼드 밈 폰트)', value: 'Impact, "Arial Black", sans-serif' },
+      { name: 'Arial', value: 'Arial, sans-serif' },
+      { name: 'Impact', value: 'Impact, "Arial Black", sans-serif' },
     ]
   },
   {
-    category: '명조계열 (Serif)',
+    category: '명조계열',
     fonts: [
-      { name: '바탕체 (Windows)', value: '"Batang", "바탕체", serif' },
-      { name: '애플명조 (macOS/iOS)', value: '"Apple Myungjo", "애플명조", serif' },
+      { name: '바탕체', value: '"Batang", "바탕체", serif' },
+      { name: '애플명조', value: '"Apple Myungjo", "애플명조", serif' },
       { name: '나눔명조', value: '"Nanum Myeongjo", "나눔명조", serif' },
-      { name: 'Georgia / Times', value: 'Georgia, "Times New Roman", serif' },
+      { name: 'Georgia', value: 'Georgia, "Times New Roman", serif' },
     ]
   },
   {
-    category: '필기 / 특수 (Display & Mono)',
+    category: '필기 / 특수',
     fonts: [
-      { name: '궁서체 (전통 필기)', value: '"Gungsuh", "궁서체", cursive' },
-      { name: '코딩 고정폭 (Monospace)', value: 'Consolas, Monaco, monospace' },
+      { name: '궁서체', value: '"Gungsuh", "궁서체", cursive' },
+      { name: '코딩 고정폭', value: 'Consolas, Monaco, monospace' },
     ]
   }
 ];
+
+export function detectPerimeterDominantColor(canvas: HTMLCanvasElement): '#ffffff' | '#000000' {
+  try {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx || canvas.width <= 0 || canvas.height <= 0) return '#ffffff';
+
+    const w = canvas.width;
+    const h = canvas.height;
+    const borderThickness = Math.max(1, Math.min(10, Math.round(Math.min(w, h) * 0.05)));
+
+    let totalLum = 0;
+    let count = 0;
+
+    const topImg = ctx.getImageData(0, 0, w, borderThickness);
+    const bottomImg = ctx.getImageData(0, Math.max(0, h - borderThickness), w, borderThickness);
+    const leftImg = ctx.getImageData(0, 0, borderThickness, h);
+    const rightImg = ctx.getImageData(Math.max(0, w - borderThickness), 0, borderThickness, h);
+
+    const sampleData = (data: Uint8ClampedArray) => {
+      for (let i = 0; i < data.length; i += 4) {
+        const a = data[i + 3];
+        if (a < 32) continue; // skip transparent pixels
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        totalLum += (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+        count++;
+      }
+    };
+
+    sampleData(topImg.data);
+    sampleData(bottomImg.data);
+    sampleData(leftImg.data);
+    sampleData(rightImg.data);
+
+    if (count === 0) return '#ffffff';
+    const avgLum = totalLum / count;
+    return avgLum >= 0.5 ? '#ffffff' : '#000000';
+  } catch {
+    return '#ffffff';
+  }
+}
 
 export interface TextItem {
   id: string;
@@ -778,8 +828,8 @@ export const ImageEditView: React.FC = () => {
     setCropRect({ x: 0, y: 0, width: newCanvas.width, height: newCanvas.height });
   };
 
-  const getAnchorArrowSymbol = (r: number, c: number) => {
-    if (r === canvasAnchor.row && c === canvasAnchor.col) return '';
+  const renderAnchorArrow = (r: number, c: number) => {
+    if (r === canvasAnchor.row && c === canvasAnchor.col) return null;
     const dr = r - canvasAnchor.row;
     const dc = c - canvasAnchor.col;
     const isShrink = currentCanvas
@@ -789,15 +839,17 @@ export const ImageEditView: React.FC = () => {
     const effDr = isShrink ? -dr : dr;
     const effDc = isShrink ? -dc : dc;
 
-    if (effDr === -1 && effDc === -1) return '↖';
-    if (effDr === -1 && effDc === 0) return '↑';
-    if (effDr === -1 && effDc === 1) return '↗';
-    if (effDr === 0 && effDc === -1) return '←';
-    if (effDr === 0 && effDc === 1) return '→';
-    if (effDr === 1 && effDc === -1) return '↙';
-    if (effDr === 1 && effDc === 0) return '↓';
-    if (effDr === 1 && effDc === 1) return '↘';
-    return '';
+    const iconProps = { className: "w-5 h-5", strokeWidth: 2.5 };
+
+    if (effDr === -1 && effDc === -1) return <ArrowUpLeft {...iconProps} />;
+    if (effDr === -1 && effDc === 0) return <ArrowUp {...iconProps} />;
+    if (effDr === -1 && effDc === 1) return <ArrowUpRight {...iconProps} />;
+    if (effDr === 0 && effDc === -1) return <ArrowLeft {...iconProps} />;
+    if (effDr === 0 && effDc === 1) return <ArrowRight {...iconProps} />;
+    if (effDr === 1 && effDc === -1) return <ArrowDownLeft {...iconProps} />;
+    if (effDr === 1 && effDc === 0) return <ArrowDown {...iconProps} />;
+    if (effDr === 1 && effDc === 1) return <ArrowDownRight {...iconProps} />;
+    return null;
   };
 
   // -------------------------------------------------------------
@@ -1039,6 +1091,10 @@ export const ImageEditView: React.FC = () => {
   const handleViewportPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!currentCanvas || !displayCanvasRef.current) return;
 
+    if (activeTool === 'text') {
+      setSelectedTextId(null);
+    }
+
     if (activeTool === 'mosaic') {
       const rect = displayCanvasRef.current.getBoundingClientRect();
       const scaleX = currentCanvas.width / Math.max(1, rect.width);
@@ -1220,11 +1276,15 @@ export const ImageEditView: React.FC = () => {
     }
   };
 
+  const handleDeleteTextItem = useCallback((id: string) => {
+    setTextItems((prev) => prev.filter((t) => t.id !== id));
+    setSelectedTextId((prev) => (prev === id ? null : prev));
+  }, []);
+
   const handleDeleteSelectedText = useCallback(() => {
     if (!selectedTextId) return;
-    setTextItems((prev) => prev.filter((t) => t.id !== selectedTextId));
-    setSelectedTextId(null);
-  }, [selectedTextId]);
+    handleDeleteTextItem(selectedTextId);
+  }, [selectedTextId, handleDeleteTextItem]);
 
   // Keyboard shortcut to delete selected text object (Delete / Backspace)
   useEffect(() => {
@@ -1321,7 +1381,8 @@ export const ImageEditView: React.FC = () => {
     if (!currentCanvas) return;
     try {
       setIsProcessing(true);
-      const success = await copyImageBlobToClipboard(currentCanvas, {
+      const finalCanvas = bakeAllTextItemsToCanvas(currentCanvas);
+      const success = await copyImageBlobToClipboard(finalCanvas, {
         x: 0,
         y: 0,
         width: currentCanvas.width,
@@ -1632,8 +1693,21 @@ export const ImageEditView: React.FC = () => {
                 const scaledFontSize = Math.max(8, item.fontSize * zoomLevel);
                 const scaledBorderWidth = item.borderWidth > 0 ? Math.max(1, Math.round(item.borderWidth * zoomLevel)) : 0;
                 const scaledRadius = Math.round(item.backgroundRadius * zoomLevel);
-                const scaledPadX = Math.max(4, Math.round(8 * zoomLevel));
-                const scaledPadY = Math.max(2, Math.round(4 * zoomLevel));
+                const hasDecor = item.hasBackground || item.borderWidth > 0;
+                const scaledPadX = hasDecor ? Math.max(4, Math.round(8 * zoomLevel)) : 0;
+                const scaledPadY = hasDecor ? Math.max(2, Math.round(4 * zoomLevel)) : 0;
+
+                const hasUserBorder = item.borderWidth > 0;
+                let outlineStyle: string | undefined = undefined;
+                let ringClass = '';
+
+                if (!hasUserBorder) {
+                  outlineStyle = isSelected
+                    ? '1.5px solid #94a3b8'
+                    : '1px dashed rgba(148, 163, 184, 0.25)';
+                } else {
+                  ringClass = isSelected ? 'ring-1 ring-indigo-400/80 shadow-md' : 'hover:ring-1 hover:ring-indigo-400/30';
+                }
 
                 return (
                   <div
@@ -1645,32 +1719,35 @@ export const ImageEditView: React.FC = () => {
                       handleSelectTextItem(item.id);
                       if (activeTool !== 'text') setActiveTool('text');
                     }}
-                    className={`absolute z-20 cursor-move select-none transition-shadow ${
-                      isSelected
-                        ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-950/80 shadow-2xl'
-                        : 'hover:ring-1 hover:ring-indigo-400/60'
-                    }`}
+                    className={`absolute z-20 cursor-move select-none transition-shadow ${ringClass}`}
                     style={{
                       left: `${leftPx}px`,
                       top: `${topPx}px`,
                       backgroundColor: item.hasBackground ? item.backgroundColor : 'transparent',
-                      borderRadius: (item.hasBackground || item.borderWidth > 0) ? `${scaledRadius}px` : '0px',
-                      borderWidth: item.borderWidth > 0 ? `${scaledBorderWidth}px` : undefined,
-                      borderColor: item.borderWidth > 0 ? item.borderColor : undefined,
-                      borderStyle: item.borderWidth > 0 ? item.borderStyle : undefined,
-                      padding: (item.hasBackground || item.borderWidth > 0) ? `${scaledPadY}px ${scaledPadX}px` : '0px',
+                      borderRadius: hasDecor ? `${scaledRadius}px` : '0px',
+                      borderWidth: hasUserBorder ? `${scaledBorderWidth}px` : undefined,
+                      borderColor: hasUserBorder ? item.borderColor : undefined,
+                      borderStyle: hasUserBorder ? item.borderStyle : undefined,
+                      outline: outlineStyle,
+                      padding: hasDecor ? `${scaledPadY}px ${scaledPadX}px` : '0px',
                       opacity: item.opacity
                     }}
-                    title="더블클릭하여 텍스트 수정, 드래그하여 이동"
+                    title={isSelected ? "드래그하여 이동, 더블클릭하여 내용 수정" : "클릭하여 선택"}
                   >
-                    {/* On-canvas direct delete button */}
+                    {/* On-canvas direct delete button: 선택된 객체에만 노출 */}
                     {isSelected && (
                       <button
                         type="button"
+                        onPointerDown={(e) => {
+                          e.stopPropagation();
+                        }}
+                        onMouseDown={(e) => {
+                          e.stopPropagation();
+                        }}
                         onClick={(e) => {
                           e.stopPropagation();
                           e.preventDefault();
-                          handleDeleteSelectedText();
+                          handleDeleteTextItem(item.id);
                         }}
                         className="absolute -top-3 -right-3 w-5 h-5 rounded-full bg-rose-600 hover:bg-rose-500 text-white shadow-lg flex items-center justify-center cursor-pointer z-30 transition-transform hover:scale-110 border border-white/50"
                         title="텍스트 삭제 (Del/Backspace)"
@@ -2113,18 +2190,24 @@ export const ImageEditView: React.FC = () => {
                       {[0, 1, 2].map((r) =>
                         [0, 1, 2].map((c) => {
                           const isAnchor = canvasAnchor.row === r && canvasAnchor.col === c;
-                          const arrow = getAnchorArrowSymbol(r, c);
+                          const arrow = renderAnchorArrow(r, c);
                           return (
                             <button
                               key={`${r}-${c}`}
+                              type="button"
                               onClick={() => setCanvasAnchor({ row: r, col: c })}
-                              className={`h-11 rounded-lg flex flex-col items-center justify-center transition cursor-pointer ${
+                              className={`w-12 h-12 rounded-lg flex items-center justify-center transition cursor-pointer ${
                                 isAnchor
-                                  ? 'bg-gradient-to-br from-indigo-500 to-purple-600 text-white font-extrabold shadow-md shadow-indigo-600/40 border border-indigo-400 scale-105'
-                                  : 'bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-800'
+                                  ? 'bg-gradient-to-br from-indigo-500 to-purple-600 text-white font-extrabold shadow-md shadow-indigo-600/40 border-2 border-indigo-300'
+                                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800'
                               }`}
+                              title={isAnchor ? '현재 고정 앵커 위치' : '이 위치를 고정 앵커로 설정'}
                             >
-                              <span className={`${['↑', '↓', '←', '→'].includes(arrow) ? 'text-lg font-bold' : 'text-sm font-semibold'} font-mono leading-none`}>{arrow}</span>
+                              {isAnchor ? (
+                                <div className="w-2.5 h-2.5 rounded-full bg-white shadow-sm" />
+                              ) : (
+                                arrow
+                              )}
                             </button>
                           );
                         })
@@ -2136,17 +2219,18 @@ export const ImageEditView: React.FC = () => {
                     <span className="text-slate-400 text-[11px]">확장 여백 배경색</span>
                     <div className="flex gap-2 items-center">
                       {[
-                        { id: 'transparent', label: '투명' },
                         { id: '#ffffff', label: '흰색' },
                         { id: '#000000', label: '검정' },
+                        { id: 'transparent', label: '투명' },
                       ].map((c) => (
                         <button
                           key={c.id}
+                          type="button"
                           onClick={() => setCanvasBgColor(c.id)}
                           className={`py-1 px-2.5 rounded-lg border text-xs font-semibold cursor-pointer transition ${
                             canvasBgColor === c.id
-                              ? 'border-indigo-400 bg-indigo-600/30 text-white'
-                              : 'border-slate-700 bg-slate-950 text-slate-400'
+                              ? 'border-indigo-400 bg-indigo-600/30 text-white shadow-sm font-bold'
+                              : 'border-slate-700 bg-slate-950 text-slate-400 hover:text-white'
                           }`}
                         >
                           {c.label}
@@ -3317,46 +3401,8 @@ export const ImageEditView: React.FC = () => {
                     </button>
                   </div>
 
-                  {/* 텍스트 객체 목록 */}
-                  {textItems.length > 0 ? (
-                    <div className="space-y-1.5">
-                      <span className="text-slate-400 text-[10px] font-semibold">텍스트 객체 목록 ({textItems.length}개)</span>
-                      <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-1 bg-slate-950/60 rounded-xl border border-slate-800">
-                        {textItems.map((item, idx) => (
-                          <div
-                            key={item.id}
-                            onClick={() => handleSelectTextItem(item.id)}
-                            className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs cursor-pointer transition border ${
-                              selectedTextId === item.id
-                                ? 'bg-indigo-600/30 border-indigo-400 text-white font-semibold'
-                                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                            }`}
-                          >
-                            <span className="truncate max-w-[100px]">{item.text || `#${idx + 1}`}</span>
-                            {selectedTextId === item.id && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteSelectedText();
-                                }}
-                                className="p-0.5 hover:text-rose-400"
-                                title="텍스트 삭제"
-                              >
-                                <X className="w-3 h-3" />
-                              </button>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="p-3 rounded-xl bg-slate-950/50 border border-slate-800/80 text-center text-slate-400 text-xs">
-                      [+ 텍스트 추가] 버튼을 눌러 새 텍스트를 배치하세요.
-                    </div>
-                  )}
-
                   {/* 선택된 텍스트 속성 편집 */}
-                  {selectedTextId && (
+                  {selectedTextId ? (
                     <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-3">
                       {/* 입력할 텍스트 */}
                       <div className="space-y-1">
@@ -3682,6 +3728,10 @@ export const ImageEditView: React.FC = () => {
                         <Trash2 className="w-3.5 h-3.5" />
                         <span>선택된 텍스트 삭제</span>
                       </button>
+                    </div>
+                  ) : (
+                    <div className="p-4 rounded-xl bg-slate-950/50 border border-slate-800/80 text-center text-slate-400 text-xs">
+                      [+ 텍스트 추가] 버튼을 눌러 새 텍스트를 배치하거나, 캔버스의 텍스트 객체를 클릭하여 편집하세요.
                     </div>
                   )}
                 </div>
