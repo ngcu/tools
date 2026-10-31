@@ -319,38 +319,18 @@ export const ImageCropView: React.FC = () => {
         className="hidden"
       />
 
-      {/* Top Banner & Title */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-gradient-to-r from-indigo-950/40 via-slate-900/90 to-purple-950/30 border border-indigo-500/20 shadow-xl backdrop-blur-sm">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-              <Scissors className="w-5 h-5" />
-            </div>
-            <h2 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-              Image Crop
-              <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-medium">
-                2단계 정밀 크롭
-              </span>
-            </h2>
-          </div>
-          <p className="text-xs sm:text-sm text-slate-400">
-            외곽 불필요한 여백을 1단계 <span className="text-indigo-300 font-semibold">Auto Crop</span>으로 자동 제거하고,
-            2단계 <span className="text-purple-300 font-semibold">Manual Crop</span>으로 원하는 크기만큼 추가 미세 조정하여 내보냅니다.
-          </p>
+      {/* Top Action Bar - Only when image is loaded */}
+      {imageSrc && (
+        <div className="flex items-center justify-end gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shadow-md backdrop-blur-sm">
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 border border-slate-700 transition flex items-center gap-1.5 cursor-pointer"
+          >
+            <FileImage className="w-3.5 h-3.5 text-indigo-400" />
+            <span>다른 이미지 열기</span>
+          </button>
         </div>
-
-        {imageSrc && (
-          <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 border border-slate-700 transition flex items-center gap-1.5 cursor-pointer"
-            >
-              <FileImage className="w-3.5 h-3.5 text-indigo-400" />
-              <span>다른 이미지 열기</span>
-            </button>
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Zero State: Drag & Drop Upload Zone */}
       {!imageSrc ? (
@@ -368,7 +348,7 @@ export const ImageCropView: React.FC = () => {
             }
           }}
           onClick={() => fileInputRef.current?.click()}
-          className={`border-2 border-dashed rounded-3xl p-8 sm:p-14 text-center cursor-pointer transition-all duration-300 group ${
+          className={`border-2 border-dashed rounded-3xl p-6 sm:p-10 w-full h-[calc(100vh-125px)] md:h-[calc(100vh-72px)] min-h-[420px] flex items-center justify-center text-center cursor-pointer transition-all duration-300 group ${
             isDraggingFile
               ? 'border-indigo-400 bg-indigo-950/40 scale-[1.01]'
               : 'border-slate-700/80 bg-slate-900/50 hover:border-indigo-500/60 hover:bg-slate-900/80 shadow-2xl'

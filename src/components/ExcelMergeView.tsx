@@ -181,32 +181,24 @@ export const ExcelMergeView: React.FC = () => {
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      {/* Top Banner / Introduction */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-5 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-slate-900/90 to-indigo-950/30 border border-emerald-500/20 shadow-xl backdrop-blur-sm">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
+    <div className={`max-w-7xl mx-auto ${files.length === 0 ? '' : 'space-y-6'}`}>
+      {/* Top Action Bar (파일이 업로드되었을 때만 표시) */}
+      {files.length > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 sm:p-4 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-md">
+          <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-              <FileSpreadsheet className="w-5 h-5" />
+              <FileSpreadsheet className="w-4 h-4" />
             </div>
-            <h2 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-              Excel & CSV Merge
-              <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-normal">
-                100% Client-Side
-              </span>
-            </h2>
+            <div>
+              <span className="text-xs sm:text-sm font-bold text-white">엑셀 및 CSV 병합</span>
+              <span className="text-xs text-emerald-400 font-semibold ml-2">({files.length}개 파일 선택됨)</span>
+            </div>
           </div>
-          <p className="text-xs sm:text-sm text-slate-400">
-            여러 개의 엑셀(<span className="text-emerald-300 font-mono">xlsx, xlsb, xlsm, xls</span>) 및 CSV 파일을
-            첫 번째 파일의 컬럼(헤더)을 기준으로 빠르고 안전하게 병합합니다. 동일 컬럼이 없는 파일의 셀은 자동으로 비워집니다.
-          </p>
-        </div>
 
-        {files.length > 0 && (
-          <div className="flex items-center gap-2 self-start md:self-center">
+          <div className="flex items-center gap-2 self-start sm:self-center">
             <button
               onClick={handleReset}
-              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 border border-slate-700 transition flex items-center gap-1.5 cursor-pointer"
+              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 border border-slate-700 transition flex items-center gap-1.5 cursor-pointer"
             >
               <RefreshCw className="w-3.5 h-3.5" />
               <span>전체 초기화</span>
@@ -215,7 +207,7 @@ export const ExcelMergeView: React.FC = () => {
             <button
               onClick={handleDownloadCSV}
               disabled={mergeResult.mergedRows.length === 0}
-              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-xs font-bold text-emerald-300 border border-emerald-500/30 transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-xs font-bold text-emerald-300 border border-emerald-500/30 transition flex items-center gap-1.5 cursor-pointer shadow-sm"
               title="한글이 안 깨지는 UTF-8 BOM CSV 다운로드"
             >
               <Download className="w-3.5 h-3.5" />
@@ -225,14 +217,14 @@ export const ExcelMergeView: React.FC = () => {
             <button
               onClick={handleDownloadXLSX}
               disabled={mergeResult.mergedRows.length === 0}
-              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-xs font-bold text-white transition flex items-center gap-2 cursor-pointer shadow-lg shadow-emerald-600/25"
+              className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-xs font-bold text-white transition flex items-center gap-2 cursor-pointer shadow-lg shadow-emerald-600/25"
             >
               <Download className="w-4 h-4" />
               <span>XLSX 엑셀 다운로드</span>
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Error Message */}
       {errorMessage && (
@@ -257,7 +249,11 @@ export const ExcelMergeView: React.FC = () => {
           }
         }}
         onClick={() => fileInputRef.current?.click()}
-        className={`relative p-8 rounded-2xl border-2 border-dashed transition-all cursor-pointer text-center group ${
+        className={`relative rounded-2xl border-2 border-dashed transition-all cursor-pointer text-center group ${
+          files.length === 0
+            ? 'w-full h-[calc(100vh-125px)] md:h-[calc(100vh-72px)] min-h-[420px] flex items-center justify-center p-6 sm:p-10'
+            : 'p-6 sm:p-8'
+        } ${
           isDragging
             ? 'border-emerald-500 bg-emerald-950/20'
             : 'border-slate-800 hover:border-emerald-500/50 bg-slate-900/40 hover:bg-slate-900/60'

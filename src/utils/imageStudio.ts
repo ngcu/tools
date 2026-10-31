@@ -56,6 +56,27 @@ export interface WatermarkTextOptions {
   borderStyle?: 'solid' | 'dashed' | 'dotted';
 }
 
+export interface Point2D {
+  x: number;
+  y: number;
+}
+
+export interface QuadPoints {
+  tl: Point2D;
+  tr: Point2D;
+  br: Point2D;
+  bl: Point2D;
+}
+
+export interface TransformOptions {
+  mode: 'crop' | 'distort' | 'perspective' | 'skew';
+  quad?: QuadPoints;
+  skewX?: number; // degrees (-45 to 45)
+  skewY?: number; // degrees (-45 to 45)
+  bgMode?: 'transparent' | 'white' | 'black';
+  autoFitBounds?: boolean;
+}
+
 /**
  * Creates a duplicate canvas from an image or canvas source
  */
@@ -207,9 +228,6 @@ export function applySharpen(canvas: HTMLCanvasElement, amount: number): HTMLCan
 }
 
 /**
- * Applies mosaic pixelation or box blur to a specific rectangular sub-region
- */
-/**
  * Natural text/stroke thickening filter (morphological dark stroke dilation)
  * Enhances thin text or faint strokes naturally without excessive blur.
  */
@@ -229,8 +247,10 @@ export function applyTextStrokeThicken(canvas: HTMLCanvasElement, strength: numb
   const h = canvas.height;
   const copy = new Uint8ClampedArray(data);
 
-  const radius = Math.min(2, Math.max(1, Math.round(strength)));
-  const blendFactor = Math.min(0.9, 0.45 + strength * 0.2);
+  const radius = strength >= 2 ? 2 : 1;
+  const isSubtle = strength < 1;
+  const blendFactor = isSubtle ? 0.32 : Math.min(0.9, 0.45 + strength * 0.2);
+  const diffThreshold = isSubtle ? 22 : 18;
 
   for (let y = radius; y < h - radius; y++) {
     for (let x = radius; x < w - radius; x++) {
@@ -245,6 +265,9 @@ export function applyTextStrokeThicken(canvas: HTMLCanvasElement, strength: numb
       for (let dy = -radius; dy <= radius; dy++) {
         for (let dx = -radius; dx <= radius; dx++) {
           if (dx === 0 && dy === 0) continue;
+          // 0.5단계 미세 볼드: 대각선 제외 상하좌우 4방향만 체크
+          if (isSubtle && dx !== 0 && dy !== 0) continue;
+
           const nIdx = ((y + dy) * w + (x + dx)) * 4;
           const lum = 0.299 * copy[nIdx] + 0.587 * copy[nIdx + 1] + 0.114 * copy[nIdx + 2];
           if (lum < minLum) {
@@ -256,7 +279,7 @@ export function applyTextStrokeThicken(canvas: HTMLCanvasElement, strength: numb
         }
       }
 
-      if (minLum < 200 && (centerLum - minLum) > 18) {
+      if (minLum < 200 && (centerLum - minLum) > diffThreshold) {
         data[centerIdx] = Math.round(copy[centerIdx] * (1 - blendFactor) + minR * blendFactor);
         data[centerIdx + 1] = Math.round(copy[centerIdx + 1] * (1 - blendFactor) + minG * blendFactor);
         data[centerIdx + 2] = Math.round(copy[centerIdx + 2] * (1 - blendFactor) + minB * blendFactor);
@@ -898,4 +921,369 @@ export function applyBackgroundColorAdjustment(
   ctx.putImageData(imgData, 0, 0);
   return resCanvas;
 }
+
+/**
+ * Solves 3x3 homography matrix H (with H[8] = 1) such that dst ~ H * src.
+ * src and dst must each contain exactly 4 points: [tl, tr, br, bl].
+ */
+export function solveHomography(src: Point2D[], dst: Point2D[]): number[] | null {
+  if (src.length !== 4 || dst.length !== 4) return null;
+  const A: number[][] = [];
+  const B: number[] = [];
+
+  for (let i = 0; i < 4; i++) {
+    const sx = src[i].x;
+    const sy = src[i].y;
+    const dx = dst[i].x;
+    const dy = dst[i].y;
+
+    A.push([sx, sy, 1, 0, 0, 0, -sx * dx, -sy * dx]);
+    B.push(dx);
+    A.push([0, 0, 0, sx, sy, 1, -sx * dy, -sy * dy]);
+    B.push(dy);
+  }
+
+  // Gauss-Jordan elimination with partial pivoting
+  const n = 8;
+  for (let i = 0; i < n; i++) {
+    let maxRow = i;
+    for (let k = i + 1; k < n; k++) {
+      if (Math.abs(A[k][i]) > Math.abs(A[maxRow][i])) {
+        maxRow = k;
+      }
+    }
+    if (Math.abs(A[maxRow][i]) < 1e-12) return null; // Singular matrix
+
+    // Swap rows
+    [A[i], A[maxRow]] = [A[maxRow], A[i]];
+    [B[i], B[maxRow]] = [B[maxRow], B[i]];
+
+    // Scale pivot row
+    const pivot = A[i][i];
+    for (let j = i; j < n; j++) {
+      A[i][j] /= pivot;
+    }
+    B[i] /= pivot;
+
+    // Eliminate other rows
+    for (let k = 0; k < n; k++) {
+      if (k === i) continue;
+      const factor = A[k][i];
+      if (Math.abs(factor) > 1e-12) {
+        for (let j = i; j < n; j++) {
+          A[k][j] -= factor * A[i][j];
+        }
+        B[k] -= factor * B[i];
+      }
+    }
+  }
+
+  const h = new Array(9);
+  for (let i = 0; i < 8; i++) {
+    h[i] = B[i];
+  }
+  h[8] = 1;
+  return h;
+}
+
+/**
+ * Bilinear sampling from source ImageData.
+ * Returns true if sampled within bounds.
+ */
+function sampleBilinear(
+  srcData: Uint8ClampedArray,
+  sw: number,
+  sh: number,
+  x: number,
+  y: number,
+  out: Uint8ClampedArray
+): boolean {
+  if (x < 0 || x > sw - 1 || y < 0 || y > sh - 1) {
+    return false;
+  }
+
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const x1 = Math.min(x0 + 1, sw - 1);
+  const y1 = Math.min(y0 + 1, sh - 1);
+
+  const fx = x - x0;
+  const fy = y - y0;
+  const w00 = (1 - fx) * (1 - fy);
+  const w10 = fx * (1 - fy);
+  const w01 = (1 - fx) * fy;
+  const w11 = fx * fy;
+
+  const idx00 = (y0 * sw + x0) * 4;
+  const idx10 = (y0 * sw + x1) * 4;
+  const idx01 = (y1 * sw + x0) * 4;
+  const idx11 = (y1 * sw + x1) * 4;
+
+  out[0] = Math.round(srcData[idx00] * w00 + srcData[idx10] * w10 + srcData[idx01] * w01 + srcData[idx11] * w11);
+  out[1] = Math.round(srcData[idx00 + 1] * w00 + srcData[idx10 + 1] * w10 + srcData[idx01 + 1] * w01 + srcData[idx11 + 1] * w11);
+  out[2] = Math.round(srcData[idx00 + 2] * w00 + srcData[idx10 + 2] * w10 + srcData[idx01 + 2] * w01 + srcData[idx11 + 2] * w11);
+  out[3] = Math.round(srcData[idx00 + 3] * w00 + srcData[idx10 + 3] * w10 + srcData[idx01 + 3] * w01 + srcData[idx11 + 3] * w11);
+  return true;
+}
+
+/**
+ * Perspective Crop (원근 자르기):
+ * Straightens a tilted quadrangle (e.g. document scan, billboard) into an upright rectangular canvas.
+ */
+export function applyPerspectiveCrop(
+  canvas: HTMLCanvasElement,
+  quad: QuadPoints,
+  options?: { outputWidth?: number; outputHeight?: number; bgMode?: 'transparent' | 'white' | 'black' }
+): HTMLCanvasElement {
+  const srcCtx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!srcCtx || canvas.width <= 0 || canvas.height <= 0) return cloneCanvas(canvas);
+
+  const { tl, tr, br, bl } = quad;
+
+  // Calculate default dimensions based on edge lengths
+  const topW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+  const botW = Math.hypot(br.x - bl.x, br.y - bl.y);
+  const leftH = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+  const rightH = Math.hypot(br.x - tr.x, br.y - tr.y);
+
+  const outW = Math.max(1, Math.round(options?.outputWidth || Math.max(topW, botW)));
+  const outH = Math.max(1, Math.round(options?.outputHeight || Math.max(leftH, rightH)));
+
+  const dstCanvas = document.createElement('canvas');
+  dstCanvas.width = outW;
+  dstCanvas.height = outH;
+  const dstCtx = dstCanvas.getContext('2d', { willReadFrequently: true });
+  if (!dstCtx) return cloneCanvas(canvas);
+
+  const bgMode = options?.bgMode || 'transparent';
+  if (bgMode === 'white') {
+    dstCtx.fillStyle = '#ffffff';
+    dstCtx.fillRect(0, 0, outW, outH);
+  } else if (bgMode === 'black') {
+    dstCtx.fillStyle = '#000000';
+    dstCtx.fillRect(0, 0, outW, outH);
+  }
+
+  // Inverse mapping: from dst rectangle to src quad
+  const dstPoints: Point2D[] = [
+    { x: 0, y: 0 },
+    { x: outW - 1, y: 0 },
+    { x: outW - 1, y: outH - 1 },
+    { x: 0, y: outH - 1 }
+  ];
+  const srcPoints: Point2D[] = [tl, tr, br, bl];
+
+  const H_inv = solveHomography(dstPoints, srcPoints);
+  if (!H_inv) return cloneCanvas(canvas);
+
+  const srcImg = srcCtx.getImageData(0, 0, canvas.width, canvas.height);
+  const dstImg = dstCtx.getImageData(0, 0, outW, outH);
+  const srcData = srcImg.data;
+  const dstData = dstImg.data;
+  const sw = canvas.width;
+  const sh = canvas.height;
+
+  const [h0, h1, h2, h3, h4, h5, h6, h7] = H_inv;
+  const sampleColor = new Uint8ClampedArray(4);
+
+  for (let dy = 0; dy < outH; dy++) {
+    const rowOffset = dy * outW * 4;
+    for (let dx = 0; dx < outW; dx++) {
+      const w = h6 * dx + h7 * dy + 1;
+      if (Math.abs(w) < 1e-10) continue;
+      const invW = 1 / w;
+      const sx = (h0 * dx + h1 * dy + h2) * invW;
+      const sy = (h3 * dx + h4 * dy + h5) * invW;
+
+      if (sampleBilinear(srcData, sw, sh, sx, sy, sampleColor)) {
+        const p = rowOffset + dx * 4;
+        if (bgMode === 'transparent' || sampleColor[3] === 255) {
+          dstData[p] = sampleColor[0];
+          dstData[p + 1] = sampleColor[1];
+          dstData[p + 2] = sampleColor[2];
+          dstData[p + 3] = sampleColor[3];
+        } else {
+          const a = sampleColor[3] / 255;
+          const bgVal = bgMode === 'white' ? 255 : 0;
+          dstData[p] = Math.round(sampleColor[0] * a + bgVal * (1 - a));
+          dstData[p + 1] = Math.round(sampleColor[1] * a + bgVal * (1 - a));
+          dstData[p + 2] = Math.round(sampleColor[2] * a + bgVal * (1 - a));
+          dstData[p + 3] = 255;
+        }
+      }
+    }
+  }
+
+  dstCtx.putImageData(dstImg, 0, 0);
+  return dstCanvas;
+}
+
+/**
+ * Free Distort / Perspective Warp (왜곡 / 원근감):
+ * Transforms the entire canvas into arbitrary quad coordinates.
+ */
+export function applyPerspectiveDistort(
+  canvas: HTMLCanvasElement,
+  quad: QuadPoints,
+  options?: { bgMode?: 'transparent' | 'white' | 'black'; autoFitBounds?: boolean }
+): HTMLCanvasElement {
+  const srcCtx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!srcCtx || canvas.width <= 0 || canvas.height <= 0) return cloneCanvas(canvas);
+
+  const sw = canvas.width;
+  const sh = canvas.height;
+  const bgMode = options?.bgMode || 'transparent';
+  const autoFit = options?.autoFitBounds ?? false;
+
+  const minX = Math.floor(Math.min(quad.tl.x, quad.tr.x, quad.br.x, quad.bl.x));
+  const maxX = Math.ceil(Math.max(quad.tl.x, quad.tr.x, quad.br.x, quad.bl.x));
+  const minY = Math.floor(Math.min(quad.tl.y, quad.tr.y, quad.br.y, quad.bl.y));
+  const maxY = Math.ceil(Math.max(quad.tl.y, quad.tr.y, quad.br.y, quad.bl.y));
+
+  const outW = autoFit ? Math.max(1, maxX - minX) : sw;
+  const outH = autoFit ? Math.max(1, maxY - minY) : sh;
+  const offsetX = autoFit ? minX : 0;
+  const offsetY = autoFit ? minY : 0;
+
+  const dstCanvas = document.createElement('canvas');
+  dstCanvas.width = outW;
+  dstCanvas.height = outH;
+  const dstCtx = dstCanvas.getContext('2d', { willReadFrequently: true });
+  if (!dstCtx) return cloneCanvas(canvas);
+
+  if (bgMode === 'white') {
+    dstCtx.fillStyle = '#ffffff';
+    dstCtx.fillRect(0, 0, outW, outH);
+  } else if (bgMode === 'black') {
+    dstCtx.fillStyle = '#000000';
+    dstCtx.fillRect(0, 0, outW, outH);
+  }
+
+  // Destination quad adjusted for canvas offset
+  const dstQuad: Point2D[] = [
+    { x: quad.tl.x - offsetX, y: quad.tl.y - offsetY },
+    { x: quad.tr.x - offsetX, y: quad.tr.y - offsetY },
+    { x: quad.br.x - offsetX, y: quad.br.y - offsetY },
+    { x: quad.bl.x - offsetX, y: quad.bl.y - offsetY }
+  ];
+
+  // Source original quad corners
+  const srcQuad: Point2D[] = [
+    { x: 0, y: 0 },
+    { x: sw - 1, y: 0 },
+    { x: sw - 1, y: sh - 1 },
+    { x: 0, y: sh - 1 }
+  ];
+
+  // Inverse mapping: from dst quad coordinates to src canvas
+  const H_inv = solveHomography(dstQuad, srcQuad);
+  if (!H_inv) return cloneCanvas(canvas);
+
+  const srcImg = srcCtx.getImageData(0, 0, sw, sh);
+  const dstImg = dstCtx.getImageData(0, 0, outW, outH);
+  const srcData = srcImg.data;
+  const dstData = dstImg.data;
+
+  const [h0, h1, h2, h3, h4, h5, h6, h7] = H_inv;
+  const sampleColor = new Uint8ClampedArray(4);
+
+  // Scan bounding box of dst quad in output coordinates
+  const bbMinX = Math.max(0, Math.floor(Math.min(...dstQuad.map(p => p.x))));
+  const bbMaxX = Math.min(outW - 1, Math.ceil(Math.max(...dstQuad.map(p => p.x))));
+  const bbMinY = Math.max(0, Math.floor(Math.min(...dstQuad.map(p => p.y))));
+  const bbMaxY = Math.min(outH - 1, Math.ceil(Math.max(...dstQuad.map(p => p.y))));
+
+  for (let dy = bbMinY; dy <= bbMaxY; dy++) {
+    const rowOffset = dy * outW * 4;
+    for (let dx = bbMinX; dx <= bbMaxX; dx++) {
+      const w = h6 * dx + h7 * dy + 1;
+      if (Math.abs(w) < 1e-10) continue;
+      const invW = 1 / w;
+      const sx = (h0 * dx + h1 * dy + h2) * invW;
+      const sy = (h3 * dx + h4 * dy + h5) * invW;
+
+      if (sampleBilinear(srcData, sw, sh, sx, sy, sampleColor)) {
+        const p = rowOffset + dx * 4;
+        if (bgMode === 'transparent' || sampleColor[3] === 255) {
+          dstData[p] = sampleColor[0];
+          dstData[p + 1] = sampleColor[1];
+          dstData[p + 2] = sampleColor[2];
+          dstData[p + 3] = sampleColor[3];
+        } else {
+          const a = sampleColor[3] / 255;
+          const bgVal = bgMode === 'white' ? 255 : 0;
+          dstData[p] = Math.round(sampleColor[0] * a + bgVal * (1 - a));
+          dstData[p + 1] = Math.round(sampleColor[1] * a + bgVal * (1 - a));
+          dstData[p + 2] = Math.round(sampleColor[2] * a + bgVal * (1 - a));
+          dstData[p + 3] = 255;
+        }
+      }
+    }
+  }
+
+  dstCtx.putImageData(dstImg, 0, 0);
+  return dstCanvas;
+}
+
+/**
+ * Skew (기울이기):
+ * Shears the canvas horizontally (skewX) and vertically (skewY).
+ */
+export function applySkew(
+  canvas: HTMLCanvasElement,
+  skewXDeg: number,
+  skewYDeg: number,
+  bgMode?: 'transparent' | 'white' | 'black'
+): HTMLCanvasElement {
+  if (skewXDeg === 0 && skewYDeg === 0) return cloneCanvas(canvas);
+
+  const sw = canvas.width;
+  const sh = canvas.height;
+  const radX = (skewXDeg * Math.PI) / 180;
+  const radY = (skewYDeg * Math.PI) / 180;
+  const tanX = Math.tan(radX);
+  const tanY = Math.tan(radY);
+
+  // 4 corners after transform: x' = x + y * tanX, y' = y + x * tanY
+  const corners: Point2D[] = [
+    { x: 0, y: 0 },
+    { x: sw, y: sw * tanY },
+    { x: sw + sh * tanX, y: sh + sw * tanY },
+    { x: sh * tanX, y: sh }
+  ];
+
+  const minX = Math.floor(Math.min(...corners.map(c => c.x)));
+  const maxX = Math.ceil(Math.max(...corners.map(c => c.x)));
+  const minY = Math.floor(Math.min(...corners.map(c => c.y)));
+  const maxY = Math.ceil(Math.max(...corners.map(c => c.y)));
+
+  const outW = Math.max(1, maxX - minX);
+  const outH = Math.max(1, maxY - minY);
+
+  const dstCanvas = document.createElement('canvas');
+  dstCanvas.width = outW;
+  dstCanvas.height = outH;
+  const ctx = dstCanvas.getContext('2d');
+  if (!ctx) return cloneCanvas(canvas);
+
+  const bg = bgMode || 'transparent';
+  if (bg === 'white') {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, outW, outH);
+  } else if (bg === 'black') {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, outW, outH);
+  }
+
+  ctx.save();
+  ctx.translate(-minX, -minY);
+  ctx.transform(1, tanY, tanX, 1, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(canvas, 0, 0);
+  ctx.restore();
+
+  return dstCanvas;
+}
+
 

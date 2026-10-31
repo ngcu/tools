@@ -30,6 +30,7 @@ import {
   Eraser,
   Pipette,
   Plus,
+  Scan,
   ArrowUp,
   ArrowDown,
   ArrowLeft,
@@ -54,13 +55,19 @@ import {
   generateToneCurveLUT,
   applyToneCurves,
   applyTextStrokeThicken,
-  applyBackgroundColorAdjustment
+  applyBackgroundColorAdjustment,
+  Point2D,
+  QuadPoints,
+  applyPerspectiveCrop,
+  applyPerspectiveDistort,
+  applySkew
 } from '../utils/imageStudio';
 import { copyImageBlobToClipboard } from '../utils/imageCropper';
 
 // Tool List
 type ActiveTool =
   | 'crop'      // 자르기
+  | 'transform' // 자유 변형 (원근 자르기 / 왜곡 / 원근감 / 기울이기)
   | 'resize'    // 이미지 크기
   | 'canvas'    // 캔버스 크기
   | 'rotate'    // 회전 / 반전
@@ -185,6 +192,26 @@ export const ImageEditView: React.FC = () => {
     initialRect: CropRect;
   } | null>(null);
 
+  // Tool: 자유 변형 (Free Transform: 왜곡 / 원근 / 기울이기 / 원근 자르기)
+  const [transformMode, setTransformMode] = useState<'crop' | 'distort' | 'perspective' | 'skew' | null>(null);
+  const [transformSelectionRect, setTransformSelectionRect] = useState<CropRect | null>(null);
+  const [isSelectingTransformRect, setIsSelectingTransformRect] = useState<boolean>(false);
+  const transformRectStartPos = useRef<{ x: number; y: number } | null>(null);
+  const [transformQuad, setTransformQuad] = useState<QuadPoints | null>(null);
+  const [transformSkewX, setTransformSkewX] = useState<number>(0);
+  const [transformSkewY, setTransformSkewY] = useState<number>(0);
+  const [transformBgMode, setTransformBgMode] = useState<'transparent' | 'white' | 'black'>('transparent');
+  const [transformAutoFit, setTransformAutoFit] = useState<boolean>(false);
+  const [transformInteraction, setTransformInteraction] = useState<
+    'none' | 'tl' | 'tr' | 'br' | 'bl' | 'body'
+  >('none');
+  const transformDragStart = useRef<{
+    clientX: number;
+    clientY: number;
+    initialQuad: QuadPoints;
+    isCtrl: boolean;
+  } | null>(null);
+
   // Tool 2: 이미지 크기 (Resize)
   const [targetWidth, setTargetWidth] = useState<number>(0);
   const [targetHeight, setTargetHeight] = useState<number>(0);
@@ -235,7 +262,7 @@ export const ImageEditView: React.FC = () => {
   const [sharpenAmount, setSharpenAmount] = useState<number>(0);
 
   // Tool 7: 타일링 / 블러 (Mosaic / Blur)
-  const [mosaicType, setMosaicType] = useState<'mosaic' | 'blur'>('mosaic');
+  const [activeMosaicMode, setActiveMosaicMode] = useState<'mosaic' | 'blur' | null>(null);
   const [mosaicSize, setMosaicSize] = useState<number>(14);
   const [mosaicSelection, setMosaicSelection] = useState<CropRect | null>(null);
   const [isSelectingMosaic, setIsSelectingMosaic] = useState<boolean>(false);
@@ -328,6 +355,36 @@ export const ImageEditView: React.FC = () => {
     setRedoStack([]);
   };
 
+  // Calculate scale for fitting canvas inside viewport with padding
+  const calculateFitScale = useCallback((canvasW: number, canvasH: number): number => {
+    if (canvasW <= 0 || canvasH <= 0) return 1.0;
+    let availW = 800;
+    let availH = 600;
+
+    if (viewportContainerRef.current) {
+      const vpRect = viewportContainerRef.current.getBoundingClientRect();
+      if (vpRect.width > 0 && vpRect.height > 0) {
+        availW = Math.max(100, vpRect.width - 64);
+        availH = Math.max(100, vpRect.height - 64);
+      }
+    } else if (typeof window !== 'undefined') {
+      availW = Math.max(100, (window.innerWidth || 1200) - 80);
+      availH = Math.max(100, (window.innerHeight || 800) - 160);
+    }
+
+    const scaleW = availW / canvasW;
+    const scaleH = availH / canvasH;
+    const fitScale = Math.min(scaleW, scaleH, 1.0);
+    return Number(Math.max(0.05, fitScale).toFixed(2));
+  }, []);
+
+  const handleFitToScreen = useCallback(() => {
+    if (!currentCanvas) return;
+    const fitScale = calculateFitScale(currentCanvas.width, currentCanvas.height);
+    setZoomLevel(fitScale);
+    setPanOffset({ x: 0, y: 0 });
+  }, [currentCanvas, calculateFitScale]);
+
   // 1. File Upload / Paste Loader
   const handleLoadFile = useCallback((file: File) => {
     if (!file.type.startsWith('image/')) {
@@ -370,6 +427,11 @@ export const ImageEditView: React.FC = () => {
         setBorderRadius(0);
         setBorderWidth(0);
         setMosaicSelection(null);
+        setTransformMode(null);
+        setTransformSelectionRect(null);
+        setTransformQuad(null);
+        setTransformSkewX(0);
+        setTransformSkewY(0);
       };
       img.src = src;
     };
@@ -419,12 +481,57 @@ export const ImageEditView: React.FC = () => {
     ) {
       const lut = generateToneCurveLUT(curveBlacks, curveShadows, curveMidtones, curveHighlights, curveWhites);
       preview = applyToneCurves(currentCanvas, lut);
-    } else if (activeTool === 'sharpen' && sharpenAmount > 0) {
-      preview = applySharpen(currentCanvas, sharpenAmount);
+    } else if (activeTool === 'sharpen') {
+      if (sharpenAmount > 0) {
+        preview = applySharpen(preview, sharpenAmount);
+      }
+      if (textThickenStrength > 0) {
+        preview = applyTextStrokeThicken(preview, textThickenStrength);
+      }
+      if (activeMosaicMode && mosaicSelection && mosaicSelection.width > 2 && mosaicSelection.height > 2) {
+        preview = applyRegionMosaic(preview, { type: activeMosaicMode, rect: mosaicSelection, size: mosaicSize });
+      }
+    } else if (activeTool === 'canvas') {
+      if (
+        canvasTargetW > 0 &&
+        canvasTargetH > 0 &&
+        (canvasTargetW !== currentCanvas.width || canvasTargetH !== currentCanvas.height || canvasBgColor !== 'transparent')
+      ) {
+        preview = applyCanvasSizeWithAnchor(
+          currentCanvas,
+          canvasTargetW,
+          canvasTargetH,
+          canvasAnchor.row,
+          canvasAnchor.col,
+          canvasBgColor
+        );
+      }
+    } else if (activeTool === 'transform') {
+      if (transformMode === 'skew') {
+        if (transformSkewX !== 0 || transformSkewY !== 0) {
+          preview = applySkew(currentCanvas, transformSkewX, transformSkewY, transformBgMode);
+        }
+      } else if (transformMode === 'distort' || transformMode === 'perspective') {
+        if (transformQuad) {
+          const w = currentCanvas.width;
+          const h = currentCanvas.height;
+          const isQuadModified =
+            Math.abs(transformQuad.tl.x) > 1 || Math.abs(transformQuad.tl.y) > 1 ||
+            Math.abs(transformQuad.tr.x - w) > 1 || Math.abs(transformQuad.tr.y) > 1 ||
+            Math.abs(transformQuad.br.x - w) > 1 || Math.abs(transformQuad.br.y - h) > 1 ||
+            Math.abs(transformQuad.bl.x) > 1 || Math.abs(transformQuad.bl.y - h) > 1;
+          if (isQuadModified) {
+            preview = applyPerspectiveDistort(currentCanvas, transformQuad, {
+              bgMode: transformBgMode,
+              autoFitBounds: transformAutoFit
+            });
+          }
+        }
+      }
     } else if (activeTool === 'border' && (borderRadius > 0 || borderWidth > 0)) {
       preview = applyBorderAndRadius(currentCanvas, { radius: borderRadius, borderWidth, borderColor });
     } else if (activeTool === 'mosaic' && mosaicSelection && mosaicSelection.width > 2 && mosaicSelection.height > 2) {
-      preview = applyRegionMosaic(currentCanvas, { type: mosaicType, rect: mosaicSelection, size: mosaicSize });
+      preview = applyRegionMosaic(currentCanvas, { type: activeMosaicMode || 'mosaic', rect: mosaicSelection, size: mosaicSize });
     }
 
     disp.width = preview.width;
@@ -435,7 +542,7 @@ export const ImageEditView: React.FC = () => {
       ctx.drawImage(preview, 0, 0);
 
       // Live selection outline for mosaic tool
-      if (activeTool === 'mosaic' && mosaicSelection) {
+      if ((activeTool === 'mosaic' || (activeTool === 'sharpen' && activeMosaicMode !== null)) && mosaicSelection) {
         ctx.strokeStyle = '#38bdf8';
         ctx.lineWidth = 2;
         ctx.setLineDash([4, 4]);
@@ -447,6 +554,7 @@ export const ImageEditView: React.FC = () => {
   }, [
     currentCanvas,
     activeTool,
+    isBgColorModified,
     bgColorTarget,
     bgColorTolerance,
     bgColorSmoothness,
@@ -462,11 +570,22 @@ export const ImageEditView: React.FC = () => {
     curveHighlights,
     curveWhites,
     sharpenAmount,
+    textThickenStrength,
+    canvasTargetW,
+    canvasTargetH,
+    canvasAnchor,
+    canvasBgColor,
+    transformMode,
+    transformQuad,
+    transformSkewX,
+    transformSkewY,
+    transformBgMode,
+    transformAutoFit,
     borderRadius,
     borderWidth,
     borderColor,
     mosaicSelection,
-    mosaicType,
+    activeMosaicMode,
     mosaicSize,
     isSelectingMosaic
   ]);
@@ -519,6 +638,8 @@ export const ImageEditView: React.FC = () => {
     setContrast(0);
     setSaturation(0);
     setSharpenAmount(0);
+    setTextThickenStrength(0);
+    setActiveMosaicMode(null);
     setBorderRadius(0);
     setBorderWidth(0);
     setFineAngle(0);
@@ -544,6 +665,8 @@ export const ImageEditView: React.FC = () => {
     setHistory([]);
     setRedoStack([]);
     setMosaicSelection(null);
+    setTextThickenStrength(0);
+    setActiveMosaicMode(null);
     setFineAngle(0);
     setCurveBlacks(0);
     setCurveShadows(0);
@@ -574,100 +697,6 @@ export const ImageEditView: React.FC = () => {
   };
 
   // -------------------------------------------------------------
-  // Commit current tool's pending changes into currentCanvas
-  // -------------------------------------------------------------
-  const handleApplyCurrentTool = () => {
-    if (!currentCanvas) return;
-
-    if (activeTool === 'crop') {
-      if (
-        cropRect.width > 0 &&
-        cropRect.height > 0 &&
-        (cropRect.width !== currentCanvas.width ||
-          cropRect.height !== currentCanvas.height ||
-          cropRect.x !== 0 ||
-          cropRect.y !== 0)
-      ) {
-        handleApplyCrop();
-      }
-    } else if (activeTool === 'resize') {
-      if (targetWidth !== currentCanvas.width || targetHeight !== currentCanvas.height) {
-        handleApplyResize();
-      }
-    } else if (activeTool === 'canvas') {
-      if (canvasTargetW !== currentCanvas.width || canvasTargetH !== currentCanvas.height) {
-        handleApplyCanvasAnchor();
-      }
-    } else if (activeTool === 'rotate') {
-      if (fineAngle !== 0) {
-        handleApplyFineRotate();
-      }
-    } else if (activeTool === 'bgcolor') {
-      if (isBgColorModified) {
-        handleApplyBgColor();
-        setIsBgColorModified(false);
-        setSelectedBgPreset(null);
-      }
-    } else if (activeTool === 'color') {
-      if (brightness !== 0 || contrast !== 0 || saturation !== 0) {
-        pushHistory(currentCanvas);
-        const colored = applyColorAdjustments(currentCanvas, { brightness, contrast, saturation });
-        setCurrentCanvas(colored);
-        setBrightness(0);
-        setContrast(0);
-        setSaturation(0);
-      }
-    } else if (activeTool === 'curves') {
-      if (curveBlacks !== 0 || curveShadows !== 0 || curveMidtones !== 0 || curveHighlights !== 0 || curveWhites !== 255) {
-        handleApplyCurves();
-      }
-    } else if (activeTool === 'sharpen') {
-      if (sharpenAmount > 0) {
-        pushHistory(currentCanvas);
-        const sharpened = applySharpen(currentCanvas, sharpenAmount);
-        setCurrentCanvas(sharpened);
-        setSharpenAmount(0);
-      }
-    } else if (activeTool === 'mosaic') {
-      if (mosaicSelection && mosaicSelection.width > 2 && mosaicSelection.height > 2) {
-        pushHistory(currentCanvas);
-        const processed = applyRegionMosaic(currentCanvas, {
-          type: mosaicType,
-          rect: mosaicSelection,
-          size: mosaicSize
-        });
-        setCurrentCanvas(processed);
-        setMosaicSelection(null);
-      }
-    } else if (activeTool === 'border') {
-      if (borderRadius > 0 || borderWidth > 0) {
-        pushHistory(currentCanvas);
-        const bordered = applyBorderAndRadius(currentCanvas, {
-          radius: borderRadius,
-          borderWidth,
-          borderColor
-        });
-        setCurrentCanvas(bordered);
-        setBorderRadius(0);
-        setBorderWidth(0);
-      }
-    }
-  };
-
-  // Tool Switching: Automatically commits current tool's pending changes!
-  const handleSelectTool = (newTool: ActiveTool) => {
-    if (newTool === activeTool) return;
-    if (activeTool !== 'text') {
-      handleApplyCurrentTool();
-    }
-    if (activeTool === 'bgcolor') {
-      setIsBgColorModified(false);
-      setSelectedBgPreset(null);
-    }
-    setActiveTool(newTool);
-  };
-
-  // -------------------------------------------------------------
   // Tool 1: 자르기 Handlers
   // -------------------------------------------------------------
   const handleApplyCrop = () => {
@@ -689,6 +718,16 @@ export const ImageEditView: React.FC = () => {
       setCanvasTargetW(cropped.width);
       setCanvasTargetH(cropped.height);
       setCropRect({ x: 0, y: 0, width: cropped.width, height: cropped.height });
+    }
+  };
+
+  const handleCropToleranceChange = (newTolerance: number) => {
+    setCropTolerance(newTolerance);
+    if (currentCanvas) {
+      const autoRes = detectAutoCropBounds(currentCanvas, { tolerance: newTolerance });
+      if (autoRes.rect.width > 0 && autoRes.rect.height > 0) {
+        setCropRect(autoRes.rect);
+      }
     }
   };
 
@@ -789,6 +828,204 @@ export const ImageEditView: React.FC = () => {
     if (cropInteraction !== 'none') {
       setCropInteraction('none');
       cropDragStart.current = null;
+      try {
+        (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+      } catch {}
+    }
+  };
+
+  // -------------------------------------------------------------
+  // Tool: 자유 변형 (Free Transform) Handlers
+  // -------------------------------------------------------------
+  const initTransformQuad = useCallback((canvas: HTMLCanvasElement | null, mode: 'crop' | 'distort' | 'perspective' | 'skew', rect?: CropRect | null) => {
+    if (!canvas || canvas.width <= 0 || canvas.height <= 0) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    const baseRect = rect && rect.width > 5 && rect.height > 5
+      ? rect
+      : { x: 0, y: 0, width: w, height: h };
+
+    setTransformQuad({
+      tl: { x: baseRect.x, y: baseRect.y },
+      tr: { x: baseRect.x + baseRect.width, y: baseRect.y },
+      br: { x: baseRect.x + baseRect.width, y: baseRect.y + baseRect.height },
+      bl: { x: baseRect.x, y: baseRect.y + baseRect.height }
+    });
+  }, []);
+
+  const handleChooseTransformMode = (mode: 'crop' | 'distort' | 'perspective' | 'skew') => {
+    if (!currentCanvas) return;
+    setTransformMode(mode);
+    setTransformSkewX(0);
+    setTransformSkewY(0);
+    if (transformSelectionRect && transformSelectionRect.width > 5 && transformSelectionRect.height > 5) {
+      initTransformQuad(currentCanvas, mode, transformSelectionRect);
+    } else if (transformQuad) {
+      // 이미 지정된 영역이 있는 경우 현재 쿼드 유지
+    } else {
+      setTransformQuad(null);
+    }
+  };
+
+  const handleResetTransformSelection = () => {
+    setTransformQuad(null);
+    setTransformSelectionRect(null);
+    setTransformSkewX(0);
+    setTransformSkewY(0);
+  };
+
+  const handleSelectEntireCanvasForTransform = () => {
+    if (!currentCanvas) return;
+    const fullRect: CropRect = { x: 0, y: 0, width: currentCanvas.width, height: currentCanvas.height };
+    setTransformSelectionRect(fullRect);
+    const mode = transformMode || 'crop';
+    if (!transformMode) {
+      setTransformMode('crop');
+    }
+    initTransformQuad(currentCanvas, mode, fullRect);
+  };
+
+  const handleApplyTransform = useCallback(() => {
+    if (!currentCanvas || currentCanvas.width <= 0 || currentCanvas.height <= 0 || !transformMode) return;
+
+    if (transformMode === 'crop') {
+      if (!transformQuad) return;
+      pushHistory(currentCanvas);
+      const res = applyPerspectiveCrop(currentCanvas, transformQuad, { bgMode: transformBgMode });
+      setCurrentCanvas(res);
+      setTargetWidth(res.width);
+      setTargetHeight(res.height);
+      setCanvasTargetW(res.width);
+      setCanvasTargetH(res.height);
+      setCropRect({ x: 0, y: 0, width: res.width, height: res.height });
+      setTransformMode(null);
+      setTransformQuad(null);
+      setTransformSelectionRect(null);
+      requestAnimationFrame(() => handleFitToScreen());
+    } else if (transformMode === 'distort' || transformMode === 'perspective') {
+      if (!transformQuad) return;
+      pushHistory(currentCanvas);
+      const res = applyPerspectiveDistort(currentCanvas, transformQuad, {
+        bgMode: transformBgMode,
+        autoFitBounds: transformAutoFit
+      });
+      setCurrentCanvas(res);
+      setTargetWidth(res.width);
+      setTargetHeight(res.height);
+      setCanvasTargetW(res.width);
+      setCanvasTargetH(res.height);
+      setCropRect({ x: 0, y: 0, width: res.width, height: res.height });
+      setTransformMode(null);
+      setTransformQuad(null);
+      setTransformSelectionRect(null);
+      requestAnimationFrame(() => handleFitToScreen());
+    } else if (transformMode === 'skew') {
+      if (transformSkewX === 0 && transformSkewY === 0) return;
+      pushHistory(currentCanvas);
+      const res = applySkew(currentCanvas, transformSkewX, transformSkewY, transformBgMode);
+      setCurrentCanvas(res);
+      setTargetWidth(res.width);
+      setTargetHeight(res.height);
+      setCanvasTargetW(res.width);
+      setCanvasTargetH(res.height);
+      setCropRect({ x: 0, y: 0, width: res.width, height: res.height });
+      setTransformSkewX(0);
+      setTransformSkewY(0);
+      setTransformMode(null);
+      setTransformQuad(null);
+      setTransformSelectionRect(null);
+      requestAnimationFrame(() => handleFitToScreen());
+    }
+  }, [currentCanvas, transformMode, transformQuad, transformBgMode, transformAutoFit, transformSkewX, transformSkewY, pushHistory, handleFitToScreen]);
+
+  const handleResetTransform = () => {
+    if (currentCanvas && transformMode) {
+      initTransformQuad(currentCanvas, transformMode, transformSelectionRect);
+      setTransformSkewX(0);
+      setTransformSkewY(0);
+    }
+  };
+
+  const handleTransformHandlePointerDown = (
+    e: React.PointerEvent,
+    action: 'tl' | 'tr' | 'br' | 'bl' | 'body'
+  ) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!transformQuad) {
+      if (currentCanvas && transformMode) initTransformQuad(currentCanvas, transformMode, transformSelectionRect);
+      return;
+    }
+    setTransformInteraction(action);
+    transformDragStart.current = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      initialQuad: {
+        tl: { ...transformQuad.tl },
+        tr: { ...transformQuad.tr },
+        br: { ...transformQuad.br },
+        bl: { ...transformQuad.bl }
+      },
+      isCtrl: e.ctrlKey || e.metaKey
+    };
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+  };
+
+  const handleTransformHandlePointerMove = (e: React.PointerEvent) => {
+    if (transformInteraction === 'none' || !transformDragStart.current || !currentCanvas || !displayCanvasRef.current || !transformQuad) return;
+    const rect = displayCanvasRef.current.getBoundingClientRect();
+    const scaleX = currentCanvas.width / Math.max(1, rect.width);
+    const scaleY = currentCanvas.height / Math.max(1, rect.height);
+    const dx = (e.clientX - transformDragStart.current.clientX) * scaleX;
+    const dy = (e.clientY - transformDragStart.current.clientY) * scaleY;
+    const init = transformDragStart.current.initialQuad;
+    const isCtrl = e.ctrlKey || e.metaKey || transformDragStart.current.isCtrl;
+
+    const nextQuad: QuadPoints = {
+      tl: { ...init.tl },
+      tr: { ...init.tr },
+      br: { ...init.br },
+      bl: { ...init.bl }
+    };
+
+    if (transformInteraction === 'body') {
+      nextQuad.tl = { x: Math.round(init.tl.x + dx), y: Math.round(init.tl.y + dy) };
+      nextQuad.tr = { x: Math.round(init.tr.x + dx), y: Math.round(init.tr.y + dy) };
+      nextQuad.br = { x: Math.round(init.br.x + dx), y: Math.round(init.br.y + dy) };
+      nextQuad.bl = { x: Math.round(init.bl.x + dx), y: Math.round(init.bl.y + dy) };
+    } else if (transformMode === 'perspective' && !isCtrl) {
+      if (transformInteraction === 'tl') {
+        nextQuad.tl = { x: Math.round(init.tl.x + dx), y: Math.round(init.tl.y + dy) };
+        nextQuad.tr = { x: Math.round(init.tr.x - dx), y: Math.round(init.tr.y + dy) };
+      } else if (transformInteraction === 'tr') {
+        nextQuad.tr = { x: Math.round(init.tr.x + dx), y: Math.round(init.tr.y + dy) };
+        nextQuad.tl = { x: Math.round(init.tl.x - dx), y: Math.round(init.tl.y + dy) };
+      } else if (transformInteraction === 'bl') {
+        nextQuad.bl = { x: Math.round(init.bl.x + dx), y: Math.round(init.bl.y + dy) };
+        nextQuad.br = { x: Math.round(init.br.x - dx), y: Math.round(init.br.y + dy) };
+      } else if (transformInteraction === 'br') {
+        nextQuad.br = { x: Math.round(init.br.x + dx), y: Math.round(init.br.y + dy) };
+        nextQuad.bl = { x: Math.round(init.bl.x - dx), y: Math.round(init.bl.y + dy) };
+      }
+    } else {
+      if (transformInteraction === 'tl') {
+        nextQuad.tl = { x: Math.round(init.tl.x + dx), y: Math.round(init.tl.y + dy) };
+      } else if (transformInteraction === 'tr') {
+        nextQuad.tr = { x: Math.round(init.tr.x + dx), y: Math.round(init.tr.y + dy) };
+      } else if (transformInteraction === 'br') {
+        nextQuad.br = { x: Math.round(init.br.x + dx), y: Math.round(init.br.y + dy) };
+      } else if (transformInteraction === 'bl') {
+        nextQuad.bl = { x: Math.round(init.bl.x + dx), y: Math.round(init.bl.y + dy) };
+      }
+    }
+
+    setTransformQuad(nextQuad);
+  };
+
+  const handleTransformHandlePointerUp = (e: React.PointerEvent) => {
+    if (transformInteraction !== 'none') {
+      setTransformInteraction('none');
+      transformDragStart.current = null;
       try {
         (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
       } catch {}
@@ -998,35 +1235,132 @@ export const ImageEditView: React.FC = () => {
     setCurveWhites(255);
   };
 
-    // Calculate scale for fitting canvas inside viewport with padding
-  const calculateFitScale = useCallback((canvasW: number, canvasH: number): number => {
-    if (canvasW <= 0 || canvasH <= 0) return 1.0;
-    let availW = 800;
-    let availH = 600;
-
-    if (viewportContainerRef.current) {
-      const vpRect = viewportContainerRef.current.getBoundingClientRect();
-      if (vpRect.width > 0 && vpRect.height > 0) {
-        availW = Math.max(100, vpRect.width - 64);
-        availH = Math.max(100, vpRect.height - 64);
-      }
-    } else if (typeof window !== 'undefined') {
-      availW = Math.max(100, (window.innerWidth || 1200) - 80);
-      availH = Math.max(100, (window.innerHeight || 800) - 160);
-    }
-
-    const scaleW = availW / canvasW;
-    const scaleH = availH / canvasH;
-    const fitScale = Math.min(scaleW, scaleH, 1.0);
-    return Number(Math.max(0.05, fitScale).toFixed(2));
-  }, []);
-
-  const handleFitToScreen = useCallback(() => {
+  // -------------------------------------------------------------
+  // Commit current tool's pending changes into currentCanvas
+  // -------------------------------------------------------------
+  const handleApplyCurrentTool = () => {
     if (!currentCanvas) return;
-    const fitScale = calculateFitScale(currentCanvas.width, currentCanvas.height);
-    setZoomLevel(fitScale);
-    setPanOffset({ x: 0, y: 0 });
-  }, [currentCanvas, calculateFitScale]);
+
+    if (activeTool === 'crop') {
+      if (
+        cropRect.width > 0 &&
+        cropRect.height > 0 &&
+        (cropRect.width !== currentCanvas.width ||
+          cropRect.height !== currentCanvas.height ||
+          cropRect.x !== 0 ||
+          cropRect.y !== 0)
+      ) {
+        handleApplyCrop();
+      }
+    } else if (activeTool === 'resize') {
+      if (targetWidth !== currentCanvas.width || targetHeight !== currentCanvas.height) {
+        handleApplyResize();
+      }
+    } else if (activeTool === 'canvas') {
+      if (canvasTargetW !== currentCanvas.width || canvasTargetH !== currentCanvas.height) {
+        handleApplyCanvasAnchor();
+      }
+    } else if (activeTool === 'rotate') {
+      if (fineAngle !== 0) {
+        handleApplyFineRotate();
+      }
+    } else if (activeTool === 'bgcolor') {
+      if (isBgColorModified) {
+        handleApplyBgColor();
+        setIsBgColorModified(false);
+        setSelectedBgPreset(null);
+      }
+    } else if (activeTool === 'color') {
+      if (brightness !== 0 || contrast !== 0 || saturation !== 0) {
+        pushHistory(currentCanvas);
+        const colored = applyColorAdjustments(currentCanvas, { brightness, contrast, saturation });
+        setCurrentCanvas(colored);
+        setBrightness(0);
+        setContrast(0);
+        setSaturation(0);
+      }
+    } else if (activeTool === 'curves') {
+      if (curveBlacks !== 0 || curveShadows !== 0 || curveMidtones !== 0 || curveHighlights !== 0 || curveWhites !== 255) {
+        handleApplyCurves();
+      }
+    } else if (activeTool === 'sharpen') {
+      const hasSharpen = sharpenAmount > 0;
+      const hasThicken = textThickenStrength > 0;
+      const hasMosaic = activeMosaicMode && mosaicSelection && mosaicSelection.width > 2 && mosaicSelection.height > 2;
+
+      if (hasSharpen || hasThicken || hasMosaic) {
+        pushHistory(currentCanvas);
+        let res = currentCanvas;
+        if (hasSharpen) {
+          res = applySharpen(res, sharpenAmount);
+        }
+        if (hasThicken) {
+          res = applyTextStrokeThicken(res, textThickenStrength);
+        }
+        if (hasMosaic) {
+          res = applyRegionMosaic(res, {
+            type: activeMosaicMode,
+            rect: mosaicSelection,
+            size: mosaicSize
+          });
+        }
+        setCurrentCanvas(res);
+        setSharpenAmount(0);
+        setTextThickenStrength(0);
+        setMosaicSelection(null);
+        setActiveMosaicMode(null);
+      }
+    } else if (activeTool === 'mosaic') {
+      if (mosaicSelection && mosaicSelection.width > 2 && mosaicSelection.height > 2) {
+        pushHistory(currentCanvas);
+        const processed = applyRegionMosaic(currentCanvas, {
+          type: activeMosaicMode || 'mosaic',
+          rect: mosaicSelection,
+          size: mosaicSize
+        });
+        setCurrentCanvas(processed);
+        setMosaicSelection(null);
+      }
+    } else if (activeTool === 'border') {
+      if (borderRadius > 0 || borderWidth > 0) {
+        pushHistory(currentCanvas);
+        const bordered = applyBorderAndRadius(currentCanvas, {
+          radius: borderRadius,
+          borderWidth,
+          borderColor
+        });
+        setCurrentCanvas(bordered);
+        setBorderRadius(0);
+        setBorderWidth(0);
+      }
+    } else if (activeTool === 'transform') {
+      handleApplyTransform();
+    }
+  };
+
+  // Tool Switching: Automatically commits current tool's pending changes!
+  const handleSelectTool = (newTool: ActiveTool) => {
+    if (newTool === activeTool) return;
+    if ((activeTool as string) !== 'text' && (activeTool as string) !== 'transform') {
+      handleApplyCurrentTool();
+    }
+    if (activeTool === 'bgcolor') {
+      setIsBgColorModified(false);
+      setSelectedBgPreset(null);
+    }
+    if (activeTool === 'sharpen') {
+      setActiveMosaicMode(null);
+      setMosaicSelection(null);
+    }
+    if (newTool === 'transform') {
+      setTransformMode(null);
+      setTransformQuad(null);
+      setTransformSelectionRect(null);
+      setTransformSkewX(0);
+      setTransformSkewY(0);
+    }
+    setActiveTool(newTool);
+  };
 
   // Automatically fit canvas to screen when a new image is loaded and viewport is ready
   useEffect(() => {
@@ -1052,7 +1386,20 @@ export const ImageEditView: React.FC = () => {
   };
 
   const handleViewportBgPointerDown = (e: React.PointerEvent) => {
-    if (activeTool === 'mosaic') return;
+    if (activeTool === 'mosaic' || (activeTool === 'sharpen' && activeMosaicMode !== null)) return;
+
+    // In transform mode before area is designated: only pan if clicking outside the image!
+    if (activeTool === 'transform' && transformQuad === null) {
+      const rect = displayCanvasRef.current?.getBoundingClientRect();
+      const isInsideImage = rect && (
+        e.clientX >= rect.left &&
+        e.clientX <= rect.right &&
+        e.clientY >= rect.top &&
+        e.clientY <= rect.bottom
+      );
+      if (isInsideImage) return; // Inside image -> do not pan, allow transform rect selection
+    }
+
     if (e.pointerType === 'touch' || e.button === 0 || e.button === 1 || e.altKey) {
       isPanningRef.current = true;
       panStartRef.current = {
@@ -1095,7 +1442,8 @@ export const ImageEditView: React.FC = () => {
       setSelectedTextId(null);
     }
 
-    if (activeTool === 'mosaic') {
+    const canSelectMosaic = activeTool === 'mosaic' || (activeTool === 'sharpen' && activeMosaicMode !== null);
+    if (canSelectMosaic) {
       const rect = displayCanvasRef.current.getBoundingClientRect();
       const scaleX = currentCanvas.width / Math.max(1, rect.width);
       const scaleY = currentCanvas.height / Math.max(1, rect.height);
@@ -1107,10 +1455,34 @@ export const ImageEditView: React.FC = () => {
       setMosaicSelection({ x: imgX, y: imgY, width: 0, height: 0 });
       (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     }
+
+    const canSelectTransformRect = activeTool === 'transform' && transformQuad === null;
+    if (canSelectTransformRect) {
+      const rect = displayCanvasRef.current.getBoundingClientRect();
+      const isInsideImage = (
+        e.clientX >= rect.left &&
+        e.clientX <= rect.right &&
+        e.clientY >= rect.top &&
+        e.clientY <= rect.bottom
+      );
+      // Only select transform area if clicking inside the image!
+      if (!isInsideImage) return;
+
+      const scaleX = currentCanvas.width / Math.max(1, rect.width);
+      const scaleY = currentCanvas.height / Math.max(1, rect.height);
+      const imgX = Math.max(0, Math.min(currentCanvas.width, (e.clientX - rect.left) * scaleX));
+      const imgY = Math.max(0, Math.min(currentCanvas.height, (e.clientY - rect.top) * scaleY));
+
+      setIsSelectingTransformRect(true);
+      transformRectStartPos.current = { x: imgX, y: imgY };
+      setTransformSelectionRect({ x: imgX, y: imgY, width: 0, height: 0 });
+      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    }
   };
 
   const handleViewportPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (activeTool === 'mosaic' && isSelectingMosaic && mosaicStartPos.current && currentCanvas && displayCanvasRef.current) {
+    const canSelectMosaic = activeTool === 'mosaic' || (activeTool === 'sharpen' && activeMosaicMode !== null);
+    if (canSelectMosaic && isSelectingMosaic && mosaicStartPos.current && currentCanvas && displayCanvasRef.current) {
       const rect = displayCanvasRef.current.getBoundingClientRect();
       const scaleX = currentCanvas.width / Math.max(1, rect.width);
       const scaleY = currentCanvas.height / Math.max(1, rect.height);
@@ -1129,12 +1501,73 @@ export const ImageEditView: React.FC = () => {
         height: Math.round(Math.min(currentCanvas.height - y, height))
       });
     }
+
+    const canSelectTransformRect = activeTool === 'transform' && transformQuad === null;
+    if (canSelectTransformRect && isSelectingTransformRect && transformRectStartPos.current && currentCanvas && displayCanvasRef.current) {
+      const rect = displayCanvasRef.current.getBoundingClientRect();
+      const scaleX = currentCanvas.width / Math.max(1, rect.width);
+      const scaleY = currentCanvas.height / Math.max(1, rect.height);
+      const currX = Math.max(0, Math.min(currentCanvas.width, (e.clientX - rect.left) * scaleX));
+      const currY = Math.max(0, Math.min(currentCanvas.height, (e.clientY - rect.top) * scaleY));
+
+      const x = Math.min(transformRectStartPos.current.x, currX);
+      const y = Math.min(transformRectStartPos.current.y, currY);
+      const width = Math.abs(currX - transformRectStartPos.current.x);
+      const height = Math.abs(currY - transformRectStartPos.current.y);
+
+      setTransformSelectionRect({
+        x: Math.round(Math.max(0, x)),
+        y: Math.round(Math.max(0, y)),
+        width: Math.round(Math.min(currentCanvas.width - x, width)),
+        height: Math.round(Math.min(currentCanvas.height - y, height))
+      });
+    }
   };
 
   const handleViewportPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (activeTool === 'mosaic' && isSelectingMosaic) {
+    const canSelectMosaic = activeTool === 'mosaic' || (activeTool === 'sharpen' && activeMosaicMode !== null);
+    if (canSelectMosaic && isSelectingMosaic) {
       setIsSelectingMosaic(false);
       mosaicStartPos.current = null;
+      try {
+        (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+      } catch {}
+    }
+
+    const canSelectTransformRect = activeTool === 'transform' && transformQuad === null;
+    if (canSelectTransformRect && isSelectingTransformRect) {
+      setIsSelectingTransformRect(false);
+      if (transformRectStartPos.current && currentCanvas && displayCanvasRef.current) {
+        const rect = displayCanvasRef.current.getBoundingClientRect();
+        const scaleX = currentCanvas.width / Math.max(1, rect.width);
+        const scaleY = currentCanvas.height / Math.max(1, rect.height);
+        const currX = Math.max(0, Math.min(currentCanvas.width, (e.clientX - rect.left) * scaleX));
+        const currY = Math.max(0, Math.min(currentCanvas.height, (e.clientY - rect.top) * scaleY));
+
+        const x = Math.min(transformRectStartPos.current.x, currX);
+        const y = Math.min(transformRectStartPos.current.y, currY);
+        const width = Math.abs(currX - transformRectStartPos.current.x);
+        const height = Math.abs(currY - transformRectStartPos.current.y);
+
+        const finalRect: CropRect = {
+          x: Math.round(Math.max(0, x)),
+          y: Math.round(Math.max(0, y)),
+          width: Math.round(Math.min(currentCanvas.width - x, width)),
+          height: Math.round(Math.min(currentCanvas.height - y, height))
+        };
+
+        if (finalRect.width > 10 && finalRect.height > 10) {
+          setTransformSelectionRect(finalRect);
+          const currentMode = transformMode || 'crop';
+          if (!transformMode) {
+            setTransformMode(currentMode);
+          }
+          initTransformQuad(currentCanvas, currentMode, finalRect);
+        } else {
+          setTransformSelectionRect(null);
+        }
+      }
+      transformRectStartPos.current = null;
       try {
         (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
       } catch {}
@@ -1412,6 +1845,7 @@ export const ImageEditView: React.FC = () => {
 
   const PALETTE_TOOLS = [
     { id: 'crop', label: '자르기', icon: Scissors },
+    { id: 'transform', label: '자유 변형', icon: Scan },
     { id: 'resize', label: '이미지 크기', icon: Scaling },
     { id: 'canvas', label: '캔버스 크기', icon: Maximize2 },
     { id: 'rotate', label: '회전 / 반전', icon: RotateCw },
@@ -1438,22 +1872,10 @@ export const ImageEditView: React.FC = () => {
         className="hidden"
       />
 
-      {/* Top Bar: Title + Actions (Undo, Redo, Reset, Delete, Copy, Save) */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shadow-md backdrop-blur-sm">
-        <div className="flex items-center gap-2 lg:w-44 shrink-0">
-          <div className="p-1 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-            <Scissors className="w-3.5 h-3.5" />
-          </div>
-          <div className="flex items-center gap-1.5">
-            <h2 className="text-sm font-bold tracking-tight text-white">Image Edit</h2>
-            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-medium">
-              Studio
-            </span>
-          </div>
-        </div>
-
-        {currentCanvas && (
-          <div className="flex flex-wrap items-center gap-1.5 self-end sm:self-center shrink-0">
+      {/* Top Bar: Actions (Undo, Redo, Reset, Delete, Copy, Save) - Only when image is loaded */}
+      {currentCanvas && (
+        <div className="flex items-center justify-end gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shadow-md backdrop-blur-sm">
+          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
             {/* Undo */}
             <button
               onClick={handleUndo}
@@ -1538,8 +1960,8 @@ export const ImageEditView: React.FC = () => {
               <span>이미지 저장</span>
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Zero State: Drag & Drop Upload Zone */}
       {!currentCanvas ? (
@@ -1557,7 +1979,7 @@ export const ImageEditView: React.FC = () => {
             }
           }}
           onClick={() => fileInputRef.current?.click()}
-          className={`border-2 border-dashed rounded-3xl p-8 sm:p-14 text-center cursor-pointer transition-all duration-300 group ${
+          className={`border-2 border-dashed rounded-3xl p-6 sm:p-10 w-full h-[calc(100vh-125px)] md:h-[calc(100vh-72px)] min-h-[420px] flex items-center justify-center text-center cursor-pointer transition-all duration-300 group ${
             isDraggingFile
               ? 'border-indigo-400 bg-indigo-950/40 scale-[1.01]'
               : 'border-slate-700/80 bg-slate-900/50 hover:border-indigo-500/60 hover:bg-slate-900/80 shadow-2xl'
@@ -1613,7 +2035,10 @@ export const ImageEditView: React.FC = () => {
             }}
             onWheel={handleWheelZoom}
             className={`absolute inset-0 flex items-center justify-center overflow-hidden p-2 sm:p-4 select-none touch-none ${
-              activeTool === 'mosaic' ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
+              activeTool === 'mosaic' ||
+              (activeTool === 'sharpen' && activeMosaicMode !== null)
+                ? 'cursor-crosshair'
+                : 'cursor-grab active:cursor-grabbing'
             }`}
           >
             {/* Checkerboard transparency grid */}
@@ -1628,7 +2053,11 @@ export const ImageEditView: React.FC = () => {
 
             {/* Main Canvas Container with Smooth Animated Transform and Zoom/Pan */}
             <div
-              className="relative inline-block will-change-transform select-none shrink-0"
+              className={`relative inline-block will-change-transform select-none shrink-0 ${
+                activeTool === 'transform' && transformQuad === null
+                  ? 'cursor-crosshair'
+                  : ''
+              }`}
               style={{
                 transform: `translate(${panOffset.x}px, ${panOffset.y}px) rotate(${fineAngle + animTransform.rotate}deg) scale(${animTransform.scaleX}, ${animTransform.scaleY})`,
                 width: `${Math.round((currentCanvas?.width || 1) * zoomLevel)}px`,
@@ -1682,6 +2111,113 @@ export const ImageEditView: React.FC = () => {
                     <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'sw')} className="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-nesw-resize hover:scale-125 transition-transform" />
                     <div onPointerDown={(e) => handleCropHandlePointerDown(e, 'w')} className="absolute top-1/2 -translate-y-1/2 -left-1.5 w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-sm cursor-ew-resize hover:scale-125 transition-transform" />
                   </div>
+                </>
+              )}
+
+              {/* Transform Initial Selection Rectangle Overlay */}
+              {activeTool === 'transform' && transformQuad === null && transformSelectionRect && transformSelectionRect.width > 2 && transformSelectionRect.height > 2 && currentCanvas && (
+                <div
+                  className="absolute border-2 border-indigo-400 bg-indigo-500/20 pointer-events-none shadow-[0_0_14px_rgba(99,102,241,0.4)]"
+                  style={{
+                    left: `${(transformSelectionRect.x / currentCanvas.width) * 100}%`,
+                    top: `${(transformSelectionRect.y / currentCanvas.height) * 100}%`,
+                    width: `${(transformSelectionRect.width / currentCanvas.width) * 100}%`,
+                    height: `${(transformSelectionRect.height / currentCanvas.height) * 100}%`,
+                  }}
+                >
+                  <div className="absolute -top-7 left-1/2 -translate-x-1/2 px-2.5 py-0.5 rounded bg-slate-950/95 text-[11px] font-mono text-indigo-300 border border-indigo-500/50 whitespace-nowrap shadow pointer-events-none">
+                    선택 영역: {transformSelectionRect.width} × {transformSelectionRect.height} px
+                  </div>
+                </div>
+              )}
+
+              {/* Transform Active Warp Overlay (왜곡 / 원근 / 원근 자르기 핸들 및 격자선) */}
+              {activeTool === 'transform' && transformQuad && currentCanvas && (
+                <>
+                  {/* SVG Polygon & 3x3 Grid */}
+                  <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
+                    <defs>
+                      <filter id="transformGlow" x="-20%" y="-20%" width="140%" height="140%">
+                        <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#818cf8" floodOpacity="0.6" />
+                      </filter>
+                    </defs>
+                    {/* Bounding Polygon */}
+                    <polygon
+                      points={`${transformQuad.tl.x * zoomLevel},${transformQuad.tl.y * zoomLevel} ${transformQuad.tr.x * zoomLevel},${transformQuad.tr.y * zoomLevel} ${transformQuad.br.x * zoomLevel},${transformQuad.br.y * zoomLevel} ${transformQuad.bl.x * zoomLevel},${transformQuad.bl.y * zoomLevel}`}
+                      fill={transformMode === 'crop' ? 'rgba(56, 189, 248, 0.12)' : 'rgba(168, 85, 247, 0.12)'}
+                      stroke={transformMode === 'crop' ? '#38bdf8' : '#a855f7'}
+                      strokeWidth="2"
+                      strokeDasharray="6,4"
+                      filter="url(#transformGlow)"
+                    />
+                    {/* 3x3 Perspective Grid Lines */}
+                    {(() => {
+                      const tlX = transformQuad.tl.x * zoomLevel;
+                      const tlY = transformQuad.tl.y * zoomLevel;
+                      const trX = transformQuad.tr.x * zoomLevel;
+                      const trY = transformQuad.tr.y * zoomLevel;
+                      const brX = transformQuad.br.x * zoomLevel;
+                      const brY = transformQuad.br.y * zoomLevel;
+                      const blX = transformQuad.bl.x * zoomLevel;
+                      const blY = transformQuad.bl.y * zoomLevel;
+
+                      const t1X = tlX + (trX - tlX) / 3;
+                      const t1Y = tlY + (trY - tlY) / 3;
+                      const b1X = blX + (brX - blX) / 3;
+                      const b1Y = blY + (brY - blY) / 3;
+
+                      const t2X = tlX + ((trX - tlX) * 2) / 3;
+                      const t2Y = tlY + ((trY - tlY) * 2) / 3;
+                      const b2X = blX + ((brX - blX) * 2) / 3;
+                      const b2Y = blY + ((brY - blY) * 2) / 3;
+
+                      const l1X = tlX + (blX - tlX) / 3;
+                      const l1Y = tlY + (blY - tlY) / 3;
+                      const r1X = trX + (brX - trX) / 3;
+                      const r1Y = trY + (brY - trY) / 3;
+
+                      const l2X = tlX + ((blX - tlX) * 2) / 3;
+                      const l2Y = tlY + ((blY - tlY) * 2) / 3;
+                      const r2X = trX + ((brX - trX) * 2) / 3;
+                      const r2Y = trY + ((brY - trY) * 2) / 3;
+
+                      return (
+                        <g stroke="rgba(255, 255, 255, 0.35)" strokeWidth="1" strokeDasharray="3,3">
+                          <line x1={t1X} y1={t1Y} x2={b1X} y2={b1Y} />
+                          <line x1={t2X} y1={t2Y} x2={b2X} y2={b2Y} />
+                          <line x1={l1X} y1={l1Y} x2={r1X} y2={r1Y} />
+                          <line x1={l2X} y1={l2Y} x2={r2X} y2={r2Y} />
+                        </g>
+                      );
+                    })()}
+                  </svg>
+
+                  {/* 4 Corner Control Handles */}
+                  {(['tl', 'tr', 'br', 'bl'] as const).map((pos) => {
+                    const pt = transformQuad[pos];
+                    const px = pt.x * zoomLevel;
+                    const py = pt.y * zoomLevel;
+                    const label = pos === 'tl' ? '좌상' : pos === 'tr' ? '우상' : pos === 'br' ? '우하' : '좌하';
+                    return (
+                      <div
+                        key={pos}
+                        onPointerDown={(e) => handleTransformHandlePointerDown(e, pos)}
+                        onPointerMove={handleTransformHandlePointerMove}
+                        onPointerUp={handleTransformHandlePointerUp}
+                        style={{
+                          left: `${px}px`,
+                          top: `${py}px`
+                        }}
+                        className="absolute -translate-x-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-white border-2 border-indigo-600 shadow-[0_0_8px_rgba(99,102,241,0.6)] flex items-center justify-center cursor-grab active:cursor-grabbing hover:scale-125 transition-transform z-40 group"
+                        title={`${label} 조절점 (드래그하여 이동 / Ctrl+드래그로 독립 왜곡)`}
+                      >
+                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-600 pointer-events-none" />
+                        <div className="absolute -top-6 px-1.5 py-0.5 rounded bg-slate-900/90 text-[10px] text-indigo-300 font-mono border border-indigo-500/40 pointer-events-none whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                          {label} ({Math.round(pt.x)}, {Math.round(pt.y)})
+                        </div>
+                      </div>
+                    );
+                  })}
                 </>
               )}
 
@@ -1773,7 +2309,7 @@ export const ImageEditView: React.FC = () => {
               })}
 
               {/* Guidelines Overlay anchored directly to Image (Grid + Draggable Horizontal & Vertical Baselines) */}
-              {activeTool === 'rotate' && (
+              {(activeTool === 'rotate' || activeTool === 'transform') && (
                 <div className="absolute inset-0 pointer-events-none select-none z-20">
                   {/* Subtle Grid Lines on image */}
                   {showGridLines && (
@@ -1795,14 +2331,14 @@ export const ImageEditView: React.FC = () => {
                           top: `${guideLineYPct}%`,
                           left: '-100vw',
                           right: '-100vw',
-                          transform: `rotate(${-fineAngle}deg)`,
+                          transform: activeTool === 'rotate' ? `rotate(${-fineAngle}deg)` : undefined,
                           transformOrigin: `${guideLineXPct}% center`
                         }}
                         className="absolute -translate-y-1/2 pointer-events-auto cursor-ns-resize group z-30 py-2.5"
                         onPointerDown={handleGuideLineHPointerDown}
                         title="가로 기준선 (이미지 기준 동일 위치 고정, 드래그하여 이동)"
                       >
-                        <div className="w-full h-[1px] bg-amber-400" />
+                        <div className="w-full h-[1px] bg-amber-400 shadow-[0_0_4px_rgba(251,191,36,0.6)]" />
                       </div>
 
                       {/* Vertical Baseline (Fixed position relative to image, plumb reference) */}
@@ -1811,14 +2347,14 @@ export const ImageEditView: React.FC = () => {
                           left: `${guideLineXPct}%`,
                           top: '-100vh',
                           bottom: '-100vh',
-                          transform: `rotate(${-fineAngle}deg)`,
+                          transform: activeTool === 'rotate' ? `rotate(${-fineAngle}deg)` : undefined,
                           transformOrigin: `center ${guideLineYPct}%`
                         }}
                         className="absolute -translate-x-1/2 pointer-events-auto cursor-ew-resize group z-30 px-2.5"
                         onPointerDown={handleGuideLineVPointerDown}
                         title="세로 기준선 (이미지 기준 동일 위치 고정, 드래그하여 이동)"
                       >
-                        <div className="h-full w-[1px] bg-cyan-400" />
+                        <div className="h-full w-[1px] bg-cyan-400 shadow-[0_0_4px_rgba(34,211,238,0.6)]" />
                       </div>
                     </>
                   )}
@@ -2045,7 +2581,7 @@ export const ImageEditView: React.FC = () => {
                       min="1"
                       max="60"
                       value={cropTolerance}
-                      onChange={(e) => setCropTolerance(parseInt(e.target.value, 10))}
+                      onChange={(e) => handleCropToleranceChange(parseInt(e.target.value, 10))}
                       className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                     />
                   </div>
@@ -2068,6 +2604,283 @@ export const ImageEditView: React.FC = () => {
                   </div>
 
                   </div>
+              )}
+
+              {/* ---------------- Tool: 자유 변형 (Free Transform) ---------------- */}
+              {activeTool === 'transform' && (
+                <div className="space-y-3.5 text-xs">
+                  {/* 1. Mode Selector Tabs (2x2 Grid) */}
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[11px] font-semibold text-slate-400">1단계: 변형 방식 선택</span>
+                      {transformQuad !== null && (
+                        <button
+                          onClick={handleResetTransformSelection}
+                          className="text-[10px] text-indigo-400 hover:text-indigo-300 underline cursor-pointer"
+                        >
+                          영역 다시 지정
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-950/70 border border-slate-800 rounded-xl">
+                      <button
+                        onClick={() => handleChooseTransformMode('crop')}
+                        className={`py-2 px-2.5 rounded-lg text-xs font-semibold transition text-center cursor-pointer ${
+                          transformMode === 'crop'
+                            ? 'bg-gradient-to-r from-sky-600 to-indigo-600 text-white shadow'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                        }`}
+                      >
+                        원근 자르기
+                      </button>
+                      <button
+                        onClick={() => handleChooseTransformMode('distort')}
+                        className={`py-2 px-2.5 rounded-lg text-xs font-semibold transition text-center cursor-pointer ${
+                          transformMode === 'distort'
+                            ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                        }`}
+                      >
+                        자유 왜곡
+                      </button>
+                      <button
+                        onClick={() => handleChooseTransformMode('perspective')}
+                        className={`py-2 px-2.5 rounded-lg text-xs font-semibold transition text-center cursor-pointer ${
+                          transformMode === 'perspective'
+                            ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                        }`}
+                      >
+                        원근감
+                      </button>
+                      <button
+                        onClick={() => handleChooseTransformMode('skew')}
+                        className={`py-2 px-2.5 rounded-lg text-xs font-semibold transition text-center cursor-pointer ${
+                          transformMode === 'skew'
+                            ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                        }`}
+                      >
+                        기울이기
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 2. Selection Prompt when Area is NOT yet designated (transformQuad === null) */}
+                  {transformQuad === null && (
+                    <div className="p-3 rounded-xl bg-indigo-950/20 border border-indigo-500/20 text-slate-300 space-y-2.5 leading-relaxed">
+                      <div className="font-semibold text-indigo-300 flex items-center gap-1.5">
+                        <Scan className="w-4 h-4 text-indigo-400" />
+                        <span>2단계: 대상 영역 지정</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        {transformMode
+                          ? '캔버스에서 변형할 영역을 마우스로 드래그하세요. 드래그가 끝나면 즉시 조절점이 생성됩니다.'
+                          : '위 4가지 변형 방식 중 하나를 선택한 후, 캔버스에서 변형할 영역을 드래그하세요.'}
+                      </p>
+
+                      <button
+                        onClick={handleSelectEntireCanvasForTransform}
+                        className="w-full py-2 px-3 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-200 hover:text-white text-xs transition cursor-pointer text-center font-medium"
+                      >
+                        이미지 전체 영역 선택
+                      </button>
+                    </div>
+                  )}
+
+                  {/* 3. Mode-specific controls when Area IS designated (transformQuad !== null) */}
+                  {transformQuad !== null && (
+                    <>
+                      {transformMode === 'crop' && (
+                        <div className="p-2.5 rounded-xl bg-sky-950/20 border border-sky-500/20 text-slate-300 space-y-1.5 leading-relaxed">
+                          <div className="font-semibold text-sky-400 flex items-center gap-1">
+                            <span>📐 원근 자르기 (Perspective Crop)</span>
+                          </div>
+                          <p className="text-[11px] text-slate-400">
+                            문서 스캔본, 비스듬히 찍힌 간판이나 액자의 4개 모서리에 조절점을 맞춘 후 적용을 누르면 정면의 네모 반듯한 평면으로 펴면서 동시에 크롭합니다.
+                          </p>
+                        </div>
+                      )}
+
+                      {transformMode === 'distort' && (
+                        <div className="p-2.5 rounded-xl bg-purple-950/20 border border-purple-500/20 text-slate-300 space-y-1.5 leading-relaxed">
+                          <div className="font-semibold text-purple-300 flex items-center gap-1">
+                            <span>✨ 자유 왜곡 (Distort)</span>
+                          </div>
+                          <p className="text-[11px] text-slate-400">
+                            네 모서리의 조절점을 각각 독립적으로 자유롭게 끌어당겨 비대칭으로 틀어진 평면을 맞춥니다.
+                          </p>
+                          <div className="text-[10px] text-indigo-300 font-mono bg-slate-900/80 px-2 py-1 rounded border border-indigo-500/30">
+                            💡 팁: 어떤 모드에서든 모서리 드래그 중 Ctrl 키를 누르면 일시적으로 Distort 모드로 동작합니다.
+                          </div>
+                        </div>
+                      )}
+
+                      {transformMode === 'perspective' && (
+                        <div className="p-2.5 rounded-xl bg-indigo-950/20 border border-indigo-500/20 text-slate-300 space-y-1.5 leading-relaxed">
+                          <div className="font-semibold text-indigo-300 flex items-center gap-1">
+                            <span>🔍 원근감 (Perspective)</span>
+                          </div>
+                          <p className="text-[11px] text-slate-400">
+                            한쪽 모서리를 잡고 당기면 반대편 대칭 모서리가 함께 움직여 사다리꼴 형태(원근감)로 폭이나 높이를 벌리거나 좁힙니다.
+                          </p>
+                          <div className="text-[10px] text-indigo-300 font-mono bg-slate-900/80 px-2 py-1 rounded border border-indigo-500/30">
+                            💡 팁: Ctrl 키를 누른 채 드래그하면 대칭 연동 없이 해당 모서리만 단독 이동합니다.
+                          </div>
+                        </div>
+                      )}
+
+                      {transformMode === 'skew' && (
+                        <div className="space-y-3">
+                          <div className="p-2.5 rounded-xl bg-indigo-950/20 border border-indigo-500/20 text-slate-300 space-y-1 leading-relaxed">
+                            <div className="font-semibold text-indigo-300">
+                              <span>📐 기울이기 (Skew)</span>
+                            </div>
+                            <p className="text-[11px] text-slate-400">
+                              평행사변형 형태로 각도를 비스듬히 눕히거나 세웁니다.
+                            </p>
+                          </div>
+
+                          {/* Skew X Slider */}
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-xs text-slate-300 font-medium">
+                              <span>수평 기울이기 (X축)</span>
+                              <span className="font-mono text-indigo-300 font-bold">{transformSkewX}°</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="-45"
+                              max="45"
+                              step="1"
+                              value={transformSkewX}
+                              onChange={(e) => setTransformSkewX(parseInt(e.target.value, 10))}
+                              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                            />
+                          </div>
+
+                          {/* Skew Y Slider */}
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-xs text-slate-300 font-medium">
+                              <span>수직 기울이기 (Y축)</span>
+                              <span className="font-mono text-indigo-300 font-bold">{transformSkewY}°</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="-45"
+                              max="45"
+                              step="1"
+                              value={transformSkewY}
+                              onChange={(e) => setTransformSkewY(parseInt(e.target.value, 10))}
+                              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Background Mode Selector */}
+                      <div className="space-y-1.5">
+                        <span className="text-[11px] font-semibold text-slate-400">여백 배경색</span>
+                        <div className="grid grid-cols-3 gap-1 p-1 bg-slate-950/70 border border-slate-800 rounded-xl">
+                          {(['transparent', 'white', 'black'] as const).map((bg) => (
+                            <button
+                              key={bg}
+                              onClick={() => setTransformBgMode(bg)}
+                              className={`py-1.5 px-2 rounded-lg text-xs font-medium transition cursor-pointer text-center ${
+                                transformBgMode === bg
+                                  ? 'bg-slate-700 text-white font-bold border border-slate-600'
+                                  : 'text-slate-400 hover:text-slate-200'
+                              }`}
+                            >
+                              {bg === 'transparent' ? '투명' : bg === 'white' ? '흰색' : '검정'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Auto-fit toggle for distort/perspective */}
+                      {(transformMode === 'distort' || transformMode === 'perspective') && (
+                        <label className="flex items-center gap-2 p-2 rounded-xl bg-slate-950/50 border border-slate-800/80 cursor-pointer hover:bg-slate-900 transition">
+                          <input
+                            type="checkbox"
+                            checked={transformAutoFit}
+                            onChange={(e) => setTransformAutoFit(e.target.checked)}
+                            className="rounded border-slate-700 text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <span className="text-slate-300 text-xs">변형 영역에 맞춰 캔버스 자동 확장</span>
+                        </label>
+                      )}
+
+                      {/* Action Buttons */}
+                      <div className="pt-2 flex flex-col gap-2">
+                        <button
+                          onClick={handleApplyTransform}
+                          className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 transition cursor-pointer active:scale-98"
+                        >
+                          <Check className="w-4 h-4" />
+                          <span>{transformMode === 'crop' ? '원근 자르기 적용' : '변형 적용'}</span>
+                        </button>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <button
+                            onClick={handleResetTransform}
+                            className="py-1.5 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs border border-slate-700 transition cursor-pointer text-center"
+                          >
+                            모서리 초기화
+                          </button>
+                          <button
+                            onClick={handleResetTransformSelection}
+                            className="py-1.5 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs border border-slate-700 transition cursor-pointer text-center"
+                          >
+                            영역 다시 지정
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* 4. 기준선 & 격자망 설정 (자유 변형 중 상시 사용 가능) */}
+                  <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2 mt-2">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={showGuidelines}
+                          onChange={(e) => setShowGuidelines(e.target.checked)}
+                          className="accent-amber-500 rounded"
+                        />
+                        <span>기준선 (가로·세로)</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={showGridLines}
+                          onChange={(e) => setShowGridLines(e.target.checked)}
+                          className="accent-indigo-500 rounded"
+                        />
+                        <span>격자망</span>
+                      </label>
+                    </div>
+
+                    {showGuidelines && (
+                      <div className="flex justify-between items-center pt-1 border-t border-slate-800/80 text-[10px] text-slate-400">
+                        <span>기준선 중앙 정렬:</span>
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => setGuideLineYPct(50)}
+                            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 font-semibold cursor-pointer"
+                          >
+                            가로선
+                          </button>
+                          <button
+                            onClick={() => setGuideLineXPct(50)}
+                            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 font-semibold cursor-pointer"
+                          >
+                            세로선
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               )}
 
               {/* ---------------- Tool 2: 이미지 크기 ---------------- */}
@@ -3234,22 +4047,23 @@ export const ImageEditView: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* 2. 텍스트 / 선 굵게 (자연스러운 볼드 효과) */}
+                  {/* 2. 텍스트 / 선 굵게 */}
                   <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
                     <div className="flex items-center justify-between text-[11px]">
-                      <span className="font-bold text-slate-300">텍스트 / 선 굵게 (진하게)</span>
+                      <span className="font-bold text-slate-300">텍스트 / 선 굵게</span>
                       <span className="text-[10px] text-indigo-400 font-mono">
-                        {textThickenStrength === 0 ? '꺼짐' : textThickenStrength === 1 ? '1단계' : '2단계'}
+                        {textThickenStrength === 0 ? '꺼짐' : `${textThickenStrength}단계`}
                       </span>
                     </div>
                     <p className="text-[10px] text-slate-400">
-                      너무 얇은 글자나 선을 1~2px 자연스럽게 볼드화하여 가독성을 높입니다.
+                      너무 얇은 글자나 선을 자연스럽게 볼드화하여 가독성을 높입니다.
                     </p>
-                    <div className="grid grid-cols-3 gap-1.5">
+                    <div className="grid grid-cols-4 gap-1.5">
                       {[
                         { level: 0, label: '없음' },
-                        { level: 1, label: '1단계 (자연스러움)' },
-                        { level: 2, label: '2단계 (더 굵게)' },
+                        { level: 0.5, label: '0.5단계' },
+                        { level: 1, label: '1단계' },
+                        { level: 2, label: '2단계' },
                       ].map((item) => (
                         <button
                           key={item.level}
@@ -3270,57 +4084,79 @@ export const ImageEditView: React.FC = () => {
                   <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
                     <div className="flex items-center justify-between text-[11px]">
                       <span className="font-bold text-slate-300">타일링 / 블러 (영역 가림)</span>
-                      <span className="text-[10px] text-sky-400 font-mono">화면 드래그</span>
+                      <span className="text-[10px] text-sky-400 font-mono">
+                        {activeMosaicMode ? '화면 드래그 활성' : '모드 선택 대기'}
+                      </span>
                     </div>
                     <div className="flex gap-2">
                       <button
-                        onClick={() => setMosaicType('mosaic')}
+                        type="button"
+                        onClick={() => {
+                          setActiveMosaicMode((prev) => (prev === 'mosaic' ? null : 'mosaic'));
+                          if (activeMosaicMode === 'mosaic') setMosaicSelection(null);
+                        }}
                         className={`flex-1 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer transition ${
-                          mosaicType === 'mosaic'
-                            ? 'border-sky-400 bg-sky-600/30 text-white'
-                            : 'border-slate-800 bg-slate-900 text-slate-400'
+                          activeMosaicMode === 'mosaic'
+                            ? 'border-sky-400 bg-sky-600/30 text-white shadow-sm font-bold'
+                            : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white'
                         }`}
                       >
                         모자이크 (타일링)
                       </button>
                       <button
-                        onClick={() => setMosaicType('blur')}
+                        type="button"
+                        onClick={() => {
+                          setActiveMosaicMode((prev) => (prev === 'blur' ? null : 'blur'));
+                          if (activeMosaicMode === 'blur') setMosaicSelection(null);
+                        }}
                         className={`flex-1 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer transition ${
-                          mosaicType === 'blur'
-                            ? 'border-sky-400 bg-sky-600/30 text-white'
-                            : 'border-slate-800 bg-slate-900 text-slate-400'
+                          activeMosaicMode === 'blur'
+                            ? 'border-sky-400 bg-sky-600/30 text-white shadow-sm font-bold'
+                            : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white'
                         }`}
                       >
                         가우시안 블러
                       </button>
                     </div>
 
-                    <div className="space-y-1">
-                      <span className="text-slate-400 text-[10px]">
-                        {mosaicType === 'mosaic' ? '타일 크기 (px)' : '블러 반경 (px)'}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="range"
-                          min="4"
-                          max="50"
-                          value={mosaicSize}
-                          onChange={(e) => setMosaicSize(parseInt(e.target.value, 10) || 4)}
-                          className="flex-1 h-1.5 bg-slate-800 rounded accent-sky-500 cursor-pointer"
-                        />
-                        <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5">
+                    {activeMosaicMode ? (
+                      <p className="text-[10px] text-sky-300 font-medium bg-sky-950/40 p-1.5 rounded-lg border border-sky-800/60 leading-tight">
+                        {activeMosaicMode === 'mosaic' ? '모자이크' : '가우시안 블러'} 활성화됨: 화면에서 원하는 영역을 마우스로 드래그하세요.
+                      </p>
+                    ) : (
+                      <p className="text-[10px] text-slate-400 leading-tight">
+                        위 버튼 중 하나를 클릭하면 화면에서 가릴 영역을 드래그할 수 있습니다.
+                      </p>
+                    )}
+
+                    {activeMosaicMode && (
+                      <div className="space-y-1 pt-1 border-t border-slate-800/80">
+                        <span className="text-slate-400 text-[10px]">
+                          {activeMosaicMode === 'mosaic' ? '타일 크기 (px)' : '블러 반경 (px)'}
+                        </span>
+                        <div className="flex items-center gap-2">
                           <input
-                            type="number"
-                            min="2"
-                            max="100"
+                            type="range"
+                            min="4"
+                            max="50"
                             value={mosaicSize}
-                            onChange={(e) => setMosaicSize(Math.max(2, parseInt(e.target.value, 10) || 4))}
-                            className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                            onChange={(e) => setMosaicSize(parseInt(e.target.value, 10) || 4)}
+                            className="flex-1 h-1.5 bg-slate-800 rounded accent-sky-500 cursor-pointer"
                           />
-                          <span className="text-[10px] text-slate-400">px</span>
+                          <div className="flex items-center gap-1 w-16 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5">
+                            <input
+                              type="number"
+                              min="2"
+                              max="100"
+                              value={mosaicSize}
+                              onChange={(e) => setMosaicSize(Math.max(2, parseInt(e.target.value, 10) || 4))}
+                              className="w-full bg-transparent text-white font-mono text-xs text-right focus:outline-none"
+                            />
+                            <span className="text-[10px] text-slate-400">px</span>
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    )}
 
                     {mosaicSelection && (
                       <div className="text-[11px] text-slate-300 font-mono bg-slate-900/90 p-2 rounded-lg border border-slate-800 flex justify-between items-center">
@@ -3331,6 +4167,7 @@ export const ImageEditView: React.FC = () => {
 
                     {mosaicSelection && (
                       <button
+                        type="button"
                         onClick={() => setMosaicSelection(null)}
                         className="w-full py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition cursor-pointer"
                       >
@@ -3340,9 +4177,11 @@ export const ImageEditView: React.FC = () => {
                   </div>
 
                   <button
+                    type="button"
                     onClick={() => {
                       setSharpenAmount(0);
                       setTextThickenStrength(0);
+                      setActiveMosaicMode(null);
                       setMosaicSelection(null);
                     }}
                     className="w-full py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs border border-slate-700 transition cursor-pointer flex items-center justify-center gap-1.5"

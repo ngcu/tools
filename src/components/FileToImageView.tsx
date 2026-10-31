@@ -265,45 +265,35 @@ export const FileToImageView: React.FC = () => {
         className="hidden"
       />
 
-      {/* Top Banner */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-gradient-to-r from-indigo-950/40 via-slate-900/90 to-purple-950/30 border border-indigo-500/20 shadow-xl backdrop-blur-sm">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-              <FileText className="w-5 h-5" />
+      {/* Top Action Bar - Only when file is loaded */}
+      {file && (
+        <div className="flex items-center justify-between gap-3 px-4 py-2 rounded-xl bg-slate-900/90 border border-slate-800 shadow-md backdrop-blur-sm">
+          <div className="flex items-center gap-2 truncate">
+            <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+              <FileText className="w-4 h-4" />
             </div>
-            <h2 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-              PDF to Image
-              <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-medium">
-                고해상도 300 DPI
-              </span>
-            </h2>
+            <span className="text-sm font-bold text-white truncate max-w-xs sm:max-w-md">{file.name}</span>
           </div>
-          <p className="text-xs sm:text-sm text-slate-400">
-            PDF 문서의 모든 페이지를 프로그램 설치 없이 브라우저 내부에서 고화질 이미지(PNG/JPEG/WebP)로 변환합니다.
-          </p>
-        </div>
 
-        {file && (
-          <div className="flex items-center gap-2 self-start sm:self-center">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 border border-slate-700 transition flex items-center gap-1.5 cursor-pointer"
+              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 border border-slate-700 transition flex items-center gap-1.5 cursor-pointer"
             >
               <FileText className="w-3.5 h-3.5 text-indigo-400" />
               <span>다른 PDF 열기</span>
             </button>
             <button
               onClick={handleClearFile}
-              className="px-3 py-2 rounded-xl bg-red-950/40 hover:bg-red-900/60 text-xs font-semibold text-red-300 border border-red-500/30 transition flex items-center gap-1.5 cursor-pointer"
+              className="px-3 py-1.5 rounded-xl bg-red-950/40 hover:bg-red-900/60 text-xs font-semibold text-red-300 border border-red-500/30 transition flex items-center gap-1.5 cursor-pointer"
               title="현재 PDF 파일을 닫고 새 파일 업로드 대기 화면으로 전환"
             >
               <Trash2 className="w-3.5 h-3.5 text-red-400" />
               <span>파일 삭제</span>
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Zero State Upload Area */}
       {!file && (
@@ -321,7 +311,7 @@ export const FileToImageView: React.FC = () => {
             }
           }}
           onClick={() => fileInputRef.current?.click()}
-          className={`border-2 border-dashed rounded-3xl p-8 sm:p-14 text-center cursor-pointer transition-all duration-300 group ${
+          className={`border-2 border-dashed rounded-3xl p-6 sm:p-10 w-full h-[calc(100vh-125px)] md:h-[calc(100vh-72px)] min-h-[420px] flex items-center justify-center text-center cursor-pointer transition-all duration-300 group ${
             isDragging
               ? 'border-indigo-400 bg-indigo-950/40 scale-[1.01]'
               : 'border-slate-700/80 bg-slate-900/50 hover:border-indigo-500/60 hover:bg-slate-900/80 shadow-2xl'
